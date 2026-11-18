@@ -15,6 +15,7 @@ keyboard.
 | `config/macros.dtsi`, `config/boards/` | Kinesis upstream, don't edit (keeps upstream merges clean) |
 | `config/adv360.conf`, `config/adv360_right.overlay` | Enable the USB bootloader reset; the right half gets its own CDC ACM port. Never add `config/adv360.overlay`: ZMK picks only the first matching overlay and it would shadow `adv360_right.overlay` |
 | `zmk-modules/usb-bootloader-reset` | Zephyr module: 1200 baud "touch" on a USB serial port reboots that half into the UF2 bootloader |
+| `zmk-modules/smart-keys` | Daily-firmware behaviors (central half only): `&repeat` smart repeat key, `&sl_hex` one-shot Hexpad layer (tap again = off, Enter on release after unicode entry), mod-morph unmask on next key. Its listeners run before ZMK's own (module objects link first) and it observes HID modifier state by `--wrap`ping `zmk_hid_masked_modifiers_set/clear` and `zmk_hid_implicit_modifiers_press` |
 | `zmk-modules/key-monitor` | **Test-only** module (snippet `key-monitor`): USB serial port on the left half that streams key positions/layer changes and accepts injected presses. Protocol in its `Kconfig` |
 | `tools/adv360/` | Stdlib-only Python: `keymap.py` (keymap/layout parser + key labels), `device.py` (key-monitor connection), `fmt.py` (keymap formatter) |
 | `bin/` | `build.sh` (runs in Docker), `flash.sh`, `keymap-ui`, `e2e` |
@@ -69,7 +70,18 @@ Work test-first against the real keyboard:
 
 Firmware C code (modules): anything that raises ZMK events (key presses)
 must run on the system work queue like ZMK's own key handling, not on a
-custom thread with a small stack (that froze the keyboard once).
+custom thread with a small stack (that froze the keyboard once). Code that
+touches HID (`zmk_hid_*`) must be central-only
+(`depends on !ZMK_SPLIT || ZMK_SPLIT_ROLE_CENTRAL`): the right half has no
+HID and fails to link. Add new modules to `EXTRA_MODULES` in
+`bin/build.sh` and in `.github/workflows/build.yml`.
+
+Keymap conventions that keep fast typing correct:
+- Shift-proof keys (a key that ignores Shift) are mod-morphs generated as
+  `&unshifted_<key>` by `macro_gen.js`, never "release Shift, tap, press
+  Shift" macros (those race with the next key).
+- Repeat is `&repeat`, the Hexpad key `&sl_hex 5`; tests find them by label
+  ("Repeat", "Hexpad"/"sticky").
 
 ## E2E tests
 
@@ -81,7 +93,10 @@ bin/e2e -x              # stop at the first failure
 ```
 
 - Needs both halves on USB and an X11 desktop (`DISPLAY`; from a shell
-  without it, e.g. Claude Code, use `DISPLAY=:1 bin/e2e`).
+  without it, e.g. Claude Code, use `DISPLAY=:1 bin/e2e`). The capture
+  window is GTK (via IBus like real apps, so compose and Ctrl+Shift+U
+  unicode entry work); `bin/e2e` re-runs itself with `/usr/bin/python3`
+  when the current Python has no PyGObject.
 - A capture window ("Adv360 e2e capture") takes the keyboard focus. Focus is
   verified (Tk + `xdotool getactivewindow`) before **every** key press and
   the test aborts instead of typing elsewhere. Don't type while tests run.
@@ -106,9 +121,17 @@ class TestThing(E2ETestCase):
 - `kb.key(label, layer="Base", sub=None, nth=0)` finds a key by its label in
   the keymap (the same labels `bin/keymap-ui` shows), so tests survive keys
   moving. `kb.binding(pos, layer)` gives the raw binding for sanity checks.
+- `kb.type("text")` types text the way a person would: each character's
+  key (plain, with Shift, or Hexpad + key) comes from the keymap labels
+  (`kb.char_map()`).
 - `kb.tap(*positions)`, `kb.press/release(pos)`, `with kb.hold(*positions)`.
   Every press waits for the keyboard's acknowledgement and until follow-up
   events (macro layer changes) have settled: no sleeps in tests.
+- `with kb.fast(gap=0.03):` types without waiting for macros/layers to
+  settle, to reproduce fast-typing races (rolls: press the next key before
+  releasing the previous one, see `test_fast_typing.py`).
+- For "every key" checks, loop over `kb.char_map()`, collect failures and
+  assert once (see `TestRepeatEveryKey`).
 - State is reset between tests: keys released, sticky layers timed out,
   Esc tapped (ends caps word, which is a toggle). If a feature adds other
   lingering state, extend `E2ETestCase.tearDown`.
