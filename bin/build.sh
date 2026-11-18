@@ -5,7 +5,7 @@ set -eu
 PWD=$(pwd)
 TIMESTAMP="${TIMESTAMP:-$(date -u +"%Y%m%d%H%M")}"
 COMMIT="${COMMIT:-$(echo xxxxxx)}"
-EXTRA_MODULES="${EXTRA_MODULES:-${PWD}/extra-modules/usb-bootloader-reset;${PWD}/extra-modules/key-monitor}"
+EXTRA_MODULES="${EXTRA_MODULES:-${PWD}/extra-modules/usb-bootloader-reset;${PWD}/extra-modules/key-monitor;${PWD}/extra-modules/smart-keys}"
 
 # TEST=1 builds the test flavor: the left half (central) gets the key-monitor
 # serial port that streams and injects key presses. Never use it day to day.

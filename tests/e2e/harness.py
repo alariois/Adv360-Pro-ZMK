@@ -63,6 +63,7 @@ class Keyboard:
         self.layer_mask = 0
         self.down = set()
         self._fast = False
+        self._gap = 0.0
 
     # -- finding keys --------------------------------------------------------
 
@@ -154,6 +155,7 @@ class Keyboard:
         """Consume follow-up events (layer changes from macros, sticky
         layers, ...) until nothing arrives for `self.quiet` seconds."""
         if self._fast:
+            time.sleep(self._gap)
             return
         deadline = time.monotonic() + max_wait
         while time.monotonic() < deadline:
@@ -198,15 +200,15 @@ class Keyboard:
                     self.release(pos)
 
     @contextmanager
-    def fast(self):
-        """Type as fast as possible: still wait for each acknowledgement
-        (a few ms), but not for macros or layer changes to settle. For
-        reproducing fast-typing races."""
-        self._fast = True
+    def fast(self, gap=0.0):
+        """Type fast: wait for each acknowledgement (a few ms) plus `gap`
+        seconds, but not for macros or layer changes to settle. For
+        reproducing fast-typing races (a quick human is ~0.03-0.06 s)."""
+        self._fast, self._gap = True, gap
         try:
             yield
         finally:
-            self._fast = False
+            self._fast, self._gap = False, 0.0
 
     def release_all(self):
         for pos in list(self.down):

@@ -200,22 +200,22 @@
     layer_left_shift {
       display-name = "LShift";
       bindings = <
-        &trans     &trans &trans &trans             &trans      &trans &tog 1                                                    &mo 4              &trans &trans          &trans       &trans &macro_equal_lshft &trans
-        &trans     &trans &trans &trans             &trans      &trans &macro_question                                           &macro_hash        &trans &trans          &trans       &trans &trans             &trans
-        &trans     &trans &trans &trans             &trans      &trans &macro_caret           &trans &trans &trans &trans        &macro_grave_lshft &trans &trans          &trans       &trans &trans             &trans
-        &caps_word &trans &trans &trans             &trans      &trans                               &trans &trans                                  &trans &trans          &trans       &trans &trans             &caps_word
-        &trans     &trans &trans &macro_grave_lshft &macro_hash                        &trans &trans &trans &trans &trans &trans                           &macro_question &macro_caret &trans &trans             &trans
+        &trans     &trans &trans &trans           &trans      &trans &tog 1                                                    &mo 4            &trans &trans          &trans       &trans &unshifted_equal &trans
+        &trans     &trans &trans &trans           &trans      &trans &macro_question                                           &macro_hash      &trans &trans          &trans       &trans &trans           &trans
+        &trans     &trans &trans &trans           &trans      &trans &macro_caret           &trans &trans &trans &trans        &unshifted_grave &trans &trans          &trans       &trans &trans           &trans
+        &caps_word &trans &trans &trans           &trans      &trans                               &trans &trans                                &trans &trans          &trans       &trans &trans           &caps_word
+        &trans     &trans &trans &unshifted_grave &macro_hash                        &trans &trans &trans &trans &trans &trans                         &macro_question &macro_caret &trans &trans           &trans
       >;
     };
 
     layer_right_shift {
       display-name = "RShift";
       bindings = <
-        &trans     &trans &trans &trans             &trans      &trans &tog 1                                                    &mo 4              &trans &trans          &trans       &trans &macro_equal_rshft &trans
-        &trans     &trans &trans &trans             &trans      &trans &macro_question                                           &macro_hash        &trans &trans          &trans       &trans &trans             &trans
-        &trans     &trans &trans &trans             &trans      &trans &macro_caret           &trans &trans &trans &trans        &macro_grave_rshft &trans &trans          &trans       &trans &trans             &trans
-        &caps_word &trans &trans &trans             &trans      &trans                               &trans &trans                                  &trans &trans          &trans       &trans &trans             &caps_word
-        &trans     &trans &trans &macro_grave_rshft &macro_hash                        &trans &trans &trans &trans &trans &trans                           &macro_question &macro_caret &trans &trans             &trans
+        &trans     &trans &trans &trans           &trans      &trans &tog 1                                                    &mo 4            &trans &trans          &trans       &trans &unshifted_equal &trans
+        &trans     &trans &trans &trans           &trans      &trans &macro_question                                           &macro_hash      &trans &trans          &trans       &trans &trans           &trans
+        &trans     &trans &trans &trans           &trans      &trans &macro_caret           &trans &trans &trans &trans        &unshifted_grave &trans &trans          &trans       &trans &trans           &trans
+        &caps_word &trans &trans &trans           &trans      &trans                               &trans &trans                                &trans &trans          &trans       &trans &trans           &caps_word
+        &trans     &trans &trans &unshifted_grave &macro_hash                        &trans &trans &trans &trans &trans &trans                         &macro_question &macro_caret &trans &trans           &trans
       >;
     };
   };

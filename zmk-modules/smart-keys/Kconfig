@@ -1,0 +1,10 @@
+config ZMK_MOD_MORPH_UNMASK_ON_NEXT_KEY
+	bool "Stop mod-morph modifier masking when another key is pressed"
+	depends on !ZMK_SPLIT || ZMK_SPLIT_ROLE_CENTRAL
+	help
+	  A mod-morph that hides the modifier that triggered it (e.g. Shift for
+	  a shift-proof '=') keeps hiding it for as long as its key is held, for
+	  every key. When typing fast the next key is often pressed before the
+	  mod-morph key is released, and comes out without Shift ('>l' instead
+	  of '>L'). With this option the mask is cleared as soon as another key
+	  is pressed; the mod-morph's own key press was already sent by then.

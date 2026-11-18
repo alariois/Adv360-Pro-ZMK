@@ -999,3 +999,15 @@ compatible = "zmk,behavior-mod-morph";
 bindings = <&kp N9>, <&kp N9>;
 mods = <(MOD_LSFT|MOD_RSFT)>;
 };
+unshifted_equal: unshifted_equal {
+compatible = "zmk,behavior-mod-morph";
+#binding-cells = <0>;
+bindings = <&kp EQUAL>, <&kp EQUAL>;
+mods = <(MOD_LSFT|MOD_RSFT)>;
+};
+unshifted_grave: unshifted_grave {
+compatible = "zmk,behavior-mod-morph";
+#binding-cells = <0>;
+bindings = <&kp GRAVE>, <&kp GRAVE>;
+mods = <(MOD_LSFT|MOD_RSFT)>;
+};

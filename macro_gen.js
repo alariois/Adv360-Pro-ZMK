@@ -317,6 +317,10 @@ bindings
 for (let i = 0; i < 10; i++) {
   add_unshifted("N" + i);
 }
+// Shift layers: = and ` without Shift (no Shift release/re-press macro,
+// so nothing to race when typing fast)
+add_unshifted("EQUAL");
+add_unshifted("GRAVE");
 
 // config/macros.dtsi belongs to Kinesis upstream, ours go in a separate file
 fs.writeFileSync("config/user_macros.dtsi", res);

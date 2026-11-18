@@ -81,7 +81,7 @@ jobs:
         run: west zephyr-export
       # $GITHUB_WORKSPACE (not ${{ github.workspace }}): the path inside the container
       - name: Extra Zephyr modules
-        run: echo "EXTRA_MODULES=${GITHUB_WORKSPACE}/zmk-modules/usb-bootloader-reset;${GITHUB_WORKSPACE}/zmk-modules/key-monitor" >> $GITHUB_ENV
+        run: echo "EXTRA_MODULES=${GITHUB_WORKSPACE}/zmk-modules/usb-bootloader-reset;${GITHUB_WORKSPACE}/zmk-modules/key-monitor;${GITHUB_WORKSPACE}/zmk-modules/smart-keys" >> $GITHUB_ENV
       - name: West Build (left)
         run: >
           west build -s zmk/app -d build/left -b adv360_left ${{ matrix.left_args }} --
