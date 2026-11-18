@@ -17,13 +17,12 @@ class RepeatTestCase(E2ETestCase):
         self.hexpad = kb.key("Hexpad", sub="sticky")
 
     def unicode(self, hex_digits):
-        """Ctrl+Shift+U <hex> Enter with the Hexpad held, like by hand."""
+        """Ctrl+Shift+U <hex> with the Hexpad held; releasing it sends Enter."""
         kb = self.kb
         with kb.hold(self.hexpad):
             kb.tap(kb.key("Ctrl+Shift+U", layer="Hexpad"))
             for ch in hex_digits:
                 kb.tap(kb.key(ch.upper(), layer="Hexpad"))
-        kb.tap(kb.key("Enter"))
 
 
 class TestRepeatEveryKey(RepeatTestCase):

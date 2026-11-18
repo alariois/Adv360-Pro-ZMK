@@ -106,15 +106,14 @@
                 bindings = <&kp HASH>, <&kp TILDE>;
                 mods = <(MOD_LSFT|MOD_RSFT)>;
         };
-    // Sticky layer for the Hexpad: pressing Shift doesn't end it, so
-    // Hexpad, Shift, key works as well as Shift, Hexpad, key.
-    sl_hex: sticky_layer_hex {
-                compatible = "zmk,behavior-sticky-key";
+    // Hexpad key: tap = next key only (Shift doesn't use it up), tap again =
+    // off, hold = momentary; releasing it after Ctrl+Shift+U unicode entry
+    // sends the finishing Enter. zmk-modules/smart-keys.
+    sl_hex: oneshot_layer_hex {
+                compatible = "zmk,behavior-oneshot-layer";
                 #binding-cells = <1>;
                 release-after-ms = <1000>;
-                quick-release;
-                ignore-modifiers;
-                bindings = <&mo>;
+                display-name = "Hexpad";
         };
     // Repeat key: replays whatever the last key typed (whole macros, unicode
     // entry, exact modifiers), skips Space. zmk-modules/smart-keys.

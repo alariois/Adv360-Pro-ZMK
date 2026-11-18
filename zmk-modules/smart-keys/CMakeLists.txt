@@ -10,3 +10,5 @@ if(CONFIG_ZMK_BEHAVIOR_SMART_REPEAT)
   zephyr_ld_options(-Wl,--wrap=zmk_hid_masked_modifiers_set
                     -Wl,--wrap=zmk_hid_masked_modifiers_clear)
 endif()
+
+target_sources_ifdef(CONFIG_ZMK_BEHAVIOR_ONESHOT_LAYER app PRIVATE src/oneshot_layer.c)

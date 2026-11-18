@@ -26,3 +26,9 @@ config ZMK_SMART_REPEAT_STEP_MS
 	default 5
 
 endif
+
+config ZMK_BEHAVIOR_ONESHOT_LAYER
+	bool
+	default y
+	depends on DT_HAS_ZMK_BEHAVIOR_ONESHOT_LAYER_ENABLED
+	depends on !ZMK_SPLIT || ZMK_SPLIT_ROLE_CENTRAL

@@ -1,0 +1,13 @@
+description: |
+  One-shot layer: tap = layer on for the next non-modifier key, tap again =
+  off, hold = momentary. Releasing it after starting Ctrl+Shift+U unicode
+  entry while holding it sends Enter to finish the entry.
+
+compatible: "zmk,behavior-oneshot-layer"
+
+include: one_param.yaml
+
+properties:
+  release-after-ms:
+    type: int
+    default: 1000
