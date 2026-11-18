@@ -178,7 +178,10 @@ class Labeler:
     def behavior_label(self, beh, params, depth):
         flat = [b for g in beh.bindings for b in g]
         if beh.compatible == "zmk,behavior-mod-morph" and len(flat) >= 2:
-            return self.label(flat[0], depth + 1)[0], self.label(flat[1], depth + 1)[0]
+            normal, morphed = self.label(flat[0], depth + 1)[0], self.label(flat[1], depth + 1)[0]
+            return normal, "no shift" if normal == morphed else morphed
+        if beh.compatible == "zmk,behavior-sticky-key" and flat and params:
+            return self.label(f"{flat[0]} {params[0]}", depth + 1)[0], "sticky"
         if beh.compatible == "zmk,behavior-hold-tap" and len(params) >= 2:
             return key_label(params[1]), key_label(params[0])
         if beh.compatible == "zmk,behavior-macro":

@@ -94,6 +94,9 @@ struct command {
 
 K_MSGQ_DEFINE(command_queue, sizeof(struct command), 32, 4);
 
+static void process_commands(struct k_work *work);
+static K_WORK_DEFINE(command_work, process_commands);
+
 static void handle_line(char *line) {
     struct command cmd = {.type = line[0]};
 
@@ -119,7 +122,9 @@ static void handle_line(char *line) {
 
     if (k_msgq_put(&command_queue, &cmd, K_NO_WAIT) != 0) {
         send_line("E queue full\n");
+        return;
     }
+    k_work_submit(&command_work);
 }
 
 /* Runs from the CDC ACM driver's work queue: only collect lines here. */
@@ -149,39 +154,48 @@ static void uart_callback(const struct device *dev, void *user_data) {
     }
 }
 
-static void key_monitor_thread(void) {
-    bool was_connected = false;
+/*
+ * Commands are processed on the system work queue, exactly like ZMK handles
+ * real key presses (physical_layouts.c): raising a position event runs the
+ * whole keymap/behavior/HID pipeline, which needs that queue's larger stack.
+ */
+static void process_commands(struct k_work *work) {
     struct command cmd;
 
-    while (true) {
-        /* Wake up regularly to notice a host connecting (DTR raised). */
-        if (k_msgq_get(&command_queue, &cmd, K_MSEC(100)) == 0) {
-            if (cmd.type == '?') {
-                send_hello();
-            } else if (cmd.type == 'K') {
-#if IS_ENABLED(CONFIG_ZMK_KEY_MONITOR_INJECT)
-                raise_zmk_position_state_changed((struct zmk_position_state_changed){
-                    .source = ZMK_POSITION_STATE_CHANGE_SOURCE_LOCAL,
-                    .position = cmd.position,
-                    .state = cmd.state,
-                    .timestamp = k_uptime_get(),
-                });
-#else
-                send_line("E injection disabled\n");
-#endif
-            }
-        }
-
-        bool connected = host_connected();
-        if (connected && !was_connected) {
+    ARG_UNUSED(work);
+    while (k_msgq_get(&command_queue, &cmd, K_NO_WAIT) == 0) {
+        if (cmd.type == '?') {
             send_hello();
+        } else if (cmd.type == 'K') {
+#if IS_ENABLED(CONFIG_ZMK_KEY_MONITOR_INJECT)
+            raise_zmk_position_state_changed((struct zmk_position_state_changed){
+                .source = ZMK_POSITION_STATE_CHANGE_SOURCE_LOCAL,
+                .position = cmd.position,
+                .state = cmd.state,
+                .timestamp = k_uptime_get(),
+            });
+#else
+            send_line("E injection disabled\n");
+#endif
         }
-        was_connected = connected;
     }
 }
 
-K_THREAD_DEFINE(key_monitor_tid, CONFIG_ZMK_KEY_MONITOR_THREAD_STACK_SIZE, key_monitor_thread, NULL,
-                NULL, NULL, CONFIG_ZMK_KEY_MONITOR_THREAD_PRIORITY, 0, 0);
+/* Notice a host opening the port (DTR raised) and greet it. */
+static void poll_host(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(host_work, poll_host);
+
+static void poll_host(struct k_work *work) {
+    static bool was_connected;
+    bool connected = host_connected();
+
+    ARG_UNUSED(work);
+    if (connected && !was_connected) {
+        send_hello();
+    }
+    was_connected = connected;
+    k_work_schedule(&host_work, K_MSEC(100));
+}
 
 static int key_monitor_init(void) {
     if (!device_is_ready(uart)) {
@@ -190,6 +204,7 @@ static int key_monitor_init(void) {
     }
     uart_irq_callback_set(uart, uart_callback);
     uart_irq_rx_enable(uart);
+    k_work_schedule(&host_work, K_MSEC(100));
     LOG_WRN("Key monitor enabled: key presses are readable%s over USB serial",
             IS_ENABLED(CONFIG_ZMK_KEY_MONITOR_INJECT) ? " and injectable" : "");
     return 0;

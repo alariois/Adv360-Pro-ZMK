@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+"""Run the end-to-end keyboard tests in tests/e2e against the real keyboard.
+
+The keyboard must run the TEST firmware; --flash builds and flashes it
+first (do that after changing the keymap). While the tests run, a capture
+window takes the keyboard focus: don't type or click elsewhere.
+
+Usage: bin/e2e [--flash] [-k PATTERN] [-v] [-x]
+  -k PATTERN   only run tests whose name contains PATTERN (repeatable)
+"""
+
+import argparse
+import os
+import subprocess
+import sys
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--flash", action="store_true", help="build + flash the test firmware first")
+    ap.add_argument("-k", action="append", dest="patterns", help="only tests matching PATTERN")
+    ap.add_argument("-v", action="store_true", help="verbose")
+    ap.add_argument("-x", action="store_true", help="stop at the first failure")
+    args = ap.parse_args()
+
+    if args.flash:
+        subprocess.run([ROOT / "bin/flash.sh", "--test"], check=True)
+
+    from tests.e2e.harness import E2EError, Session
+
+    loader = unittest.TestLoader()
+    if args.patterns:
+        loader.testNamePatterns = [f"*{p}*" for p in args.patterns]
+    suite = loader.discover(str(ROOT / "tests/e2e"), top_level_dir=str(ROOT))
+    try:
+        result = unittest.TextTestRunner(verbosity=2 if args.v else 1, failfast=args.x).run(suite)
+    except E2EError as e:
+        sys.exit(f"e2e setup failed: {e}")
+    finally:
+        Session.close()
+    sys.exit(0 if result.wasSuccessful() else 1)
+
+
+if __name__ == "__main__":
+    main()

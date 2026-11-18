@@ -20,15 +20,3 @@ config ZMK_KEY_MONITOR_INJECT
 	help
 	  TEST BUILDS ONLY. Lets any local program with access to the serial
 	  port press keys, as if typed on the keyboard (also over Bluetooth).
-
-if ZMK_KEY_MONITOR
-
-config ZMK_KEY_MONITOR_THREAD_STACK_SIZE
-	int "Stack size of the key monitor thread"
-	default 1024
-
-config ZMK_KEY_MONITOR_THREAD_PRIORITY
-	int "Priority of the key monitor thread"
-	default 10
-
-endif

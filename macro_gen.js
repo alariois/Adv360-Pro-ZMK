@@ -17,6 +17,18 @@ function add_kp_macro(key) {
   add_macro(key.toLowerCase(), `&kp ${key}`);
 }
 
+// Mod-morph that sends `key` whether or not Shift is held: ZMK masks the
+// triggering Shift while the morphed binding is pressed.
+function add_unshifted(key) {
+  const name = `unshifted_${key.toLowerCase()}`;
+  res += `${name}: ${name} {\n`;
+  res += `compatible = "zmk,behavior-mod-morph";\n`;
+  res += `#binding-cells = <0>;\n`;
+  res += `bindings = <&kp ${key}>, <&kp ${key}>;\n`;
+  res += `mods = <(MOD_LSFT|MOD_RSFT)>;\n`;
+  res += `};\n`;
+}
+
 function add_shift_macro(key) {
   add_macro(`shift_${key.toLowerCase()}`, `&kp LS(${key})`);
 }
@@ -300,6 +312,11 @@ bindings
   add_kp_macro(key);
   add_shift_macro(key);
 });
+
+// Hexpad digits stay digits when Shift is held
+for (let i = 0; i < 10; i++) {
+  add_unshifted("N" + i);
+}
 
 // config/macros.dtsi belongs to Kinesis upstream, ours go in a separate file
 fs.writeFileSync("config/user_macros.dtsi", res);
