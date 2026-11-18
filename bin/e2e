@@ -20,7 +20,23 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 
+def ensure_gtk_python():
+    """The capture window uses GTK (PyGObject). Re-run with the system Python
+    if the current one doesn't have it."""
+    try:
+        import gi  # noqa: F401
+        return
+    except ImportError:
+        pass
+    system = "/usr/bin/python3"
+    if os.path.exists(system) and os.path.realpath(system) != os.path.realpath(sys.executable):
+        if subprocess.run([system, "-c", "import gi"], capture_output=True).returncode == 0:
+            os.execv(system, [system, __file__, *sys.argv[1:]])
+    sys.exit("The e2e tests need PyGObject with GTK 3: sudo apt install python3-gi gir1.2-gtk-3.0")
+
+
 def main():
+    ensure_gtk_python()
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--flash", action="store_true", help="build + flash the test firmware first")
     ap.add_argument("-k", action="append", dest="patterns", help="only tests matching PATTERN")

@@ -5,9 +5,10 @@ Needs the TEST firmware (bin/flash.sh --test) and an X11 desktop.
   * Keyboard  - injects key presses through the key-monitor port. Keys are
                 looked up by their label in config/adv360.keymap, so tests
                 survive keys being moved around.
-  * Capture   - a Tk text window that is forced to the front and must hold
-                the keyboard focus before anything is pressed; it records the
-                resulting text and every raw key event.
+  * Capture   - a GTK text window (same input method as your apps, so
+                compose and Ctrl+Shift+U unicode entry work) that is forced to
+                the front and must hold the keyboard focus before anything is
+                pressed; it records the resulting text and every key event.
   * E2ETestCase - unittest base class wiring both together.
 
 Writing a test:
@@ -61,6 +62,7 @@ class Keyboard:
         self.log = []  # (time, line) of everything the keyboard said, for failure messages
         self.layer_mask = 0
         self.down = set()
+        self._fast = False
 
     # -- finding keys --------------------------------------------------------
 
@@ -108,6 +110,8 @@ class Keyboard:
     def _settle(self, max_wait=0.5):
         """Consume follow-up events (layer changes from macros, sticky
         layers, ...) until nothing arrives for `self.quiet` seconds."""
+        if self._fast:
+            return
         deadline = time.monotonic() + max_wait
         while time.monotonic() < deadline:
             try:
@@ -150,6 +154,17 @@ class Keyboard:
                 if pos in self.down:
                     self.release(pos)
 
+    @contextmanager
+    def fast(self):
+        """Type as fast as possible: still wait for each acknowledgement
+        (a few ms), but not for macros or layer changes to settle. For
+        reproducing fast-typing races."""
+        self._fast = True
+        try:
+            yield
+        finally:
+            self._fast = False
+
     def release_all(self):
         for pos in list(self.down):
             try:
@@ -170,41 +185,55 @@ class Keyboard:
 # ---- the focused text view ---------------------------------------------------
 
 class Capture:
-    """A Tk window with a text box that owns the keyboard focus. Everything the
-    keyboard types lands here; key events are recorded too."""
+    """A GTK window with a text view that owns the keyboard focus. Everything
+    the keyboard types lands here, through the same input method (IBus) as in
+    normal GTK apps, so compose sequences and Ctrl+Shift+U unicode entry work.
+    Key events are recorded too."""
 
-    TITLE = "Adv360 e2e capture - don't touch the keyboard"
+    TITLE = "Adv360 e2e capture"
 
     def __init__(self):
-        import tkinter as tk
-
         if not os.environ.get("DISPLAY"):
             raise E2EError("DISPLAY is not set: run the e2e tests from your desktop session")
-        self.tk = tk
-        self.root = tk.Tk()
-        self.title = f"{self.TITLE} [{os.getpid()}]"
-        self.root.title(self.title)
+        import gi
+        gi.require_version("Gtk", "3.0")
+        gi.require_version("Gdk", "3.0")
+        from gi.repository import Gdk, Gtk
+        self.Gtk, self.Gdk = Gtk, Gdk
+
+        self.title = f"{self.TITLE} {os.getpid()}"
         self._window_id = None
-        self.root.geometry("760x300+80+80")
-        self.root.attributes("-topmost", True)
-        self.label = tk.Label(self.root, text="", anchor="w", font=("TkDefaultFont", 11))
-        self.label.pack(fill="x", padx=8, pady=(8, 0))
-        self.text = tk.Text(self.root, font=("TkFixedFont", 14), wrap="char")
-        self.text.pack(fill="both", expand=True, padx=8, pady=8)
         self.key_events = []
-        for seq in ("<KeyPress>", "<KeyRelease>"):
-            self.text.bind(seq, self._record, add="+")
-        self.root.update()
+
+        self.win = Gtk.Window(title=self.title)
+        self.win.set_default_size(760, 300)
+        self.win.move(80, 80)
+        self.win.set_keep_above(True)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin=8)
+        self.label = Gtk.Label(xalign=0)
+        self.view = Gtk.TextView(monospace=True, wrap_mode=Gtk.WrapMode.CHAR)
+        self.view.connect("key-press-event", self._record, "down")
+        self.view.connect("key-release-event", self._record, "up")
+        scroll = Gtk.ScrolledWindow(vexpand=True)
+        scroll.add(self.view)
+        box.pack_start(self.label, False, False, 0)
+        box.pack_start(scroll, True, True, 0)
+        self.win.add(box)
+        self.win.show_all()
+        self.pump(0.3)
         self.focus()
 
-    def _record(self, e):
-        self.key_events.append((e.type == self.tk.EventType.KeyPress and "down" or "up",
-                                e.keysym, e.char, e.state))
+    def _record(self, widget, event, kind):
+        self.key_events.append((kind, self.Gdk.keyval_name(event.keyval) or str(event.keyval),
+                                "", int(event.state)))
+        return False  # let the text view (and IBus) handle it
 
     def pump(self, seconds=0.0):
+        Gtk = self.Gtk
         end = time.monotonic() + seconds
         while True:
-            self.root.update()
+            while Gtk.events_pending():
+                Gtk.main_iteration_do(False)
             if time.monotonic() >= end:
                 return
             time.sleep(0.005)
@@ -219,15 +248,15 @@ class Capture:
 
     @property
     def window_id(self):
-        """The X window the window manager knows (not Tk's internal ids)."""
+        """The X window the window manager knows."""
         if self._window_id is None:
             ids = self._xdotool("search", "--name", "^" + re.escape(self.title) + "$")
             self._window_id = int(ids[-1]) if ids else None
         return self._window_id
 
     def has_focus(self):
-        self.root.update()
-        if self.root.focus_get() is not self.text:
+        self.pump()
+        if not (self.win.is_active() and self.view.has_focus()):
             return False
         active = self._xdotool("getactivewindow")
         return bool(active) and self.window_id is not None and int(active[0]) == self.window_id
@@ -235,11 +264,10 @@ class Capture:
     def focus(self, timeout=3.0):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            self.root.deiconify()
-            self.root.lift()
+            self.win.present()
             if self.window_id is not None:
                 self._xdotool("windowactivate", str(self.window_id))
-            self.text.focus_force()
+            self.view.grab_focus()
             self.pump(0.1)
             if self.has_focus():
                 return
@@ -252,17 +280,18 @@ class Capture:
             self.focus(timeout=1.0)
 
     def status(self, text):
-        self.label.config(text=text)
+        self.label.set_text(f"{text}  -  don't touch the keyboard")
         self.pump()
 
     def clear(self):
         self.pump(0.05)  # flush anything still in flight
-        self.text.delete("1.0", "end")
+        self.view.get_buffer().set_text("")
         self.key_events.clear()
 
     def typed(self):
         self.pump()
-        return self.text.get("1.0", "end-1c")
+        buf = self.view.get_buffer()
+        return buf.get_text(buf.get_start_iter(), buf.get_end_iter(), True)
 
     def wait_for_text(self, expected, timeout=2.0, settle=0.15):
         """Wait until the text equals `expected` (and stays so for `settle` s,
@@ -277,7 +306,8 @@ class Capture:
 
     def close(self):
         try:
-            self.root.destroy()
+            self.win.destroy()
+            self.pump(0.05)
         except Exception:
             pass
 
