@@ -1,6 +1,6 @@
 """Connection to the key-monitor serial port of a TEST firmware build.
 
-Protocol (see modules/key-monitor/Kconfig):
+Protocol (see zmk-modules/key-monitor/Kconfig):
   device -> host  "H key-monitor <ver> inject=<0|1> keys=<n>", "P <pos> <1|0>",
                   "L <layer mask hex> <highest layer>", "E <error>"
   host -> device  "?", "K <pos> <1|0>"

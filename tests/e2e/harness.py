@@ -49,12 +49,16 @@ class Keyboard:
     """Presses keys on the real keyboard and waits for it to acknowledge each
     one, so tests are deterministic instead of sleep-based."""
 
-    def __init__(self, monitor, km, gap=0.015, before_input=None):
+    def __init__(self, monitor, km, quiet=0.03, before_input=None):
         self.monitor = monitor
         self.layers = km["layers"]
-        self.gap = gap  # pause after each press/release, lets the host see separate reports
+        # After each press/release, wait until the keyboard has been quiet
+        # this long: macros (e.g. the Shift keys: Shift + layer) finish
+        # asynchronously and report their layer changes a few ms later.
+        self.quiet = quiet
         self.before_input = before_input or (lambda: None)
         self.events = queue.Queue()
+        self.log = []  # (time, line) of everything the keyboard said, for failure messages
         self.layer_mask = 0
         self.down = set()
 
@@ -83,6 +87,7 @@ class Keyboard:
     # -- device events ---------------------------------------------------------
 
     def on_message(self, line):
+        self.log.append((time.monotonic(), line))
         if line.startswith("L "):
             self.layer_mask = int(line.split()[1], 16)
         self.events.put(line)
@@ -100,6 +105,18 @@ class Keyboard:
                 raise E2EError(f"keyboard said {got!r} while waiting for {line!r}")
         raise E2EError(f"keyboard didn't acknowledge {line!r} within {timeout}s")
 
+    def _settle(self, max_wait=0.5):
+        """Consume follow-up events (layer changes from macros, sticky
+        layers, ...) until nothing arrives for `self.quiet` seconds."""
+        deadline = time.monotonic() + max_wait
+        while time.monotonic() < deadline:
+            try:
+                got = self.events.get(timeout=self.quiet)
+            except queue.Empty:
+                return
+            if got.startswith("E ") or got == "disconnected":
+                raise E2EError(f"keyboard said {got!r}")
+
     # -- pressing keys ---------------------------------------------------------
 
     def press(self, pos):
@@ -107,13 +124,13 @@ class Keyboard:
         self.monitor.press(pos, True)
         self._wait_for(f"P {pos} 1")
         self.down.add(pos)
-        time.sleep(self.gap)
+        self._settle()
 
     def release(self, pos):
         self.monitor.press(pos, False)
         self._wait_for(f"P {pos} 0")
         self.down.discard(pos)
-        time.sleep(self.gap)
+        self._settle()
 
     def tap(self, *positions, hold=0.02):
         for pos in positions:
@@ -323,13 +340,21 @@ class E2ETestCase(unittest.TestCase):
         self.kb, self.capture = s.kb, s.capture
         self.kb.wait_idle()
         self.capture.clear()
+        self.kb.log.clear()
         self.capture.status(f"Running {self.id().split('.', 2)[-1]}")
         self.capture.ensure_focus()
 
+    # Tapped after every test to end "until the next key" state such as caps
+    # word, which a later test would otherwise toggle off instead of on.
+    # Esc does nothing in the capture window.
+    RESET_KEY = ("Esc", "Base")
+
     def tearDown(self):
-        self.kb.release_all()
+        kb = self.kb
+        kb.release_all()
         try:
-            self.kb.wait_idle()  # let sticky layers time out before the next test
+            kb.wait_idle()  # let sticky layers time out
+            kb.tap(kb.key(*self.RESET_KEY))
         except E2EError:
             pass
 
@@ -338,5 +363,8 @@ class E2ETestCase(unittest.TestCase):
         if got != expected:
             events = " ".join(f"{d}:{k}" for d, k, _, _ in self.capture.key_events
                               if d == "down")
+            t0 = self.kb.log[0][0] if self.kb.log else 0
+            device = " ".join(f"[{(t - t0) * 1000:.0f}ms {line}]" for t, line in self.kb.log)
             self.fail(f"typed {got!r}, expected {expected!r}"
-                      + (f" ({msg})" if msg else "") + f"\n  key events: {events}")
+                      + (f" ({msg})" if msg else "")
+                      + f"\n  key events: {events}\n  keyboard: {device}")

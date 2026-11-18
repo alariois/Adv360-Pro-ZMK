@@ -3,7 +3,7 @@
 # Build (optional) and flash both halves of the Advantage 360 Pro in one go.
 #
 # Each half is rebooted into its UF2 bootloader by a "1200 baud touch" on its
-# USB serial port (see modules/usb-bootloader-reset). If a half has no such
+# USB serial port (see zmk-modules/usb-bootloader-reset). If a half has no such
 # port (e.g. it still runs older firmware) you're asked to press
 # Mod + bootloader key on that half instead.
 #

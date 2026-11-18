@@ -1,5 +1,5 @@
 # Test builds only: adds a USB serial port that streams key presses and
-# layer changes, and accepts injected presses. See modules/key-monitor.
+# layer changes, and accepts injected presses. See zmk-modules/key-monitor.
 name: key-monitor
 append:
   EXTRA_DTC_OVERLAY_FILE: key-monitor.overlay

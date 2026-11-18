@@ -6,6 +6,13 @@
 #include <dt-bindings/zmk/backlight.h>
 #include <dt-bindings/zmk/pointing.h>
 
+// Caps word (tap both Shift keys) keeps going through ':' so MAC addresses
+// can be typed in uppercase via the Hexpad. Letters and digits always
+// continue; the rest of the list is ZMK's default.
+&caps_word {
+    continue-list = <UNDERSCORE BACKSPACE DELETE COLON>;
+};
+
 / {
   behaviors {
     #include "macros.dtsi"

@@ -20,7 +20,7 @@ all:
 	$(DOCKER) run --rm $(DOCKER_TTY) --name zmk \
 		-v $(PWD)/firmware:/app/firmware$(SELINUX1) \
 		-v $(PWD)/config:/app/config:ro$(SELINUX2) \
-		-v $(PWD)/modules:/app/extra-modules:ro$(SELINUX2) \
+		-v $(PWD)/zmk-modules:/app/extra-modules:ro$(SELINUX2) \
 		-e TIMESTAMP=$(TIMESTAMP) \
 		-e COMMIT=$(COMMIT) \
 		-e HOST_UID=$(shell id -u) -e HOST_GID=$(shell id -g) \
@@ -35,7 +35,7 @@ left:
 	$(DOCKER) run --rm $(DOCKER_TTY) --name zmk \
 		-v $(PWD)/firmware:/app/firmware$(SELINUX1) \
 		-v $(PWD)/config:/app/config:ro$(SELINUX2) \
-		-v $(PWD)/modules:/app/extra-modules:ro$(SELINUX2) \
+		-v $(PWD)/zmk-modules:/app/extra-modules:ro$(SELINUX2) \
 		-e TIMESTAMP=$(TIMESTAMP) \
 		-e COMMIT=$(COMMIT) \
 		-e HOST_UID=$(shell id -u) -e HOST_GID=$(shell id -g) \
