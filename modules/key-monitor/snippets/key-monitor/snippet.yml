@@ -1,0 +1,6 @@
+# Test builds only: adds a USB serial port that streams key presses and
+# layer changes, and accepts injected presses. See modules/key-monitor.
+name: key-monitor
+append:
+  EXTRA_DTC_OVERLAY_FILE: key-monitor.overlay
+  EXTRA_CONF_FILE: key-monitor.conf

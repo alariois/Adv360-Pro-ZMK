@@ -1,0 +1,11 @@
+/ {
+    chosen {
+        zmk,key-monitor-uart = &key_monitor_cdc_acm;
+    };
+};
+
+&zephyr_udc0 {
+    key_monitor_cdc_acm: key_monitor_cdc_acm {
+        compatible = "zephyr,cdc-acm-uart";
+    };
+};

@@ -1,0 +1,222 @@
+#!/usr/bin/env python3
+"""Live keymap viewer for the Advantage 360 Pro.
+
+Shows the layout from config/adv360.keymap (reloaded when you save it), the
+active layers and the currently pressed keys, and lets you press keys from
+the browser. Needs the TEST firmware (bin/flash.sh --test) for the live part;
+without it the page still shows the keymap.
+
+Usage: bin/keymap-ui [--port 8360] [--serial /dev/ttyACMx] [--no-browser]
+"""
+
+import argparse
+import json
+import queue
+import sys
+import threading
+import time
+import traceback
+import urllib.request
+import webbrowser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+
+from adv360 import keymap  # noqa: E402
+from adv360.device import KeyMonitor  # noqa: E402
+
+INDEX = ROOT / "tools/keymap-ui/index.html"
+
+
+class Hub:
+    """Fans device/keymap events out to every open browser tab, and keeps a
+    snapshot so new tabs start in sync."""
+
+    def __init__(self):
+        self.clients = set()
+        self.lock = threading.Lock()
+        self.state = {"connected": False, "hello": None, "port": None,
+                      "layers": 0, "highest": 0, "pressed": []}
+        self.injected = set()  # positions the browser is holding down
+
+    def publish(self, event, data):
+        msg = f"event: {event}\ndata: {json.dumps(data)}\n\n"
+        with self.lock:
+            for q in list(self.clients):
+                try:
+                    q.put_nowait(msg)
+                except queue.Full:
+                    self.clients.discard(q)
+
+    def on_device_line(self, line):
+        s = self.state
+        kind, _, rest = line.partition(" ")
+        if kind == "connected":
+            s.update(connected=True, port=rest, pressed=[])
+        elif kind == "disconnected":
+            s.update(connected=False, hello=None, pressed=[], layers=0, highest=0)
+            self.injected.clear()
+        elif kind == "H":
+            s["hello"] = line
+        elif kind == "P":
+            pos, state = (int(x) for x in rest.split())
+            pressed = set(s["pressed"])
+            (pressed.add if state else pressed.discard)(pos)
+            s["pressed"] = sorted(pressed)
+        elif kind == "L":
+            mask, highest = rest.split()
+            s.update(layers=int(mask, 16), highest=int(highest))
+        self.publish("device", {"line": line, "state": s})
+
+
+def make_handler(hub, monitor):
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):
+            pass
+
+        def reply(self, code, body, ctype="application/json"):
+            data = body if isinstance(body, bytes) else json.dumps(body).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def host_ok(self):
+            # Refuse DNS-rebinding: a page on another domain that resolves to
+            # 127.0.0.1 could otherwise read the key stream or press keys.
+            host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
+            if host in ("127.0.0.1", "localhost"):
+                return True
+            self.reply(403, {"error": "bad Host header"})
+            return False
+
+        def do_GET(self):
+            if not self.host_ok():
+                return
+            if self.path == "/":
+                self.reply(200, INDEX.read_bytes(), "text/html; charset=utf-8")
+            elif self.path == "/api/keymap":
+                try:
+                    self.reply(200, keymap.load())
+                except Exception as e:  # show parse errors in the page
+                    self.reply(500, {"error": f"{type(e).__name__}: {e}"})
+            elif self.path == "/api/events":
+                self.events()
+            else:
+                self.reply(404, {"error": "not found"})
+
+        def events(self):
+            q = queue.Queue(maxsize=1000)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            q.put(f"event: device\ndata: {json.dumps({'line': None, 'state': hub.state})}\n\n")
+            with hub.lock:
+                hub.clients.add(q)
+            try:
+                while True:
+                    try:
+                        msg = q.get(timeout=15)
+                    except queue.Empty:
+                        msg = ": keepalive\n\n"
+                    self.wfile.write(msg.encode())
+                    self.wfile.flush()
+            except OSError:
+                pass
+            finally:
+                with hub.lock:
+                    hub.clients.discard(q)
+
+        def do_POST(self):
+            if not self.host_ok():
+                return
+            # Only same-origin requests from the page may press keys.
+            origin = self.headers.get("Origin")
+            if origin and origin != f"http://{self.headers.get('Host')}":
+                return self.reply(403, {"error": "cross-origin request refused"})
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or "{}")
+                if self.path == "/api/key":
+                    pos, pressed = int(body["pos"]), bool(body["pressed"])
+                    monitor.press(pos, pressed)
+                    (hub.injected.add if pressed else hub.injected.discard)(pos)
+                elif self.path == "/api/release-all":
+                    for pos in list(hub.injected):
+                        monitor.press(pos, False)
+                    hub.injected.clear()
+                else:
+                    return self.reply(404, {"error": "not found"})
+                self.reply(200, {"ok": True})
+            except (ConnectionError, OSError) as e:
+                self.reply(503, {"error": str(e)})
+            except (KeyError, ValueError) as e:
+                self.reply(400, {"error": f"bad request: {e}"})
+
+    return Handler
+
+
+def watch_keymap(hub):
+    version = keymap.files_version()
+    while True:
+        time.sleep(0.5)
+        v = keymap.files_version()
+        if v != version:
+            version = v
+            hub.publish("keymap", {"version": v})
+
+
+def already_running(url):
+    """True if our server already answers on url (e.g. started in another terminal)."""
+    try:
+        with urllib.request.urlopen(url, timeout=1) as r:
+            return b"<title>Adv360 Keymap</title>" in r.read(2048)
+    except OSError:
+        return False
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--port", type=int, default=8360)
+    ap.add_argument("--serial", help="key-monitor serial port (default: auto-detect)")
+    ap.add_argument("--no-browser", action="store_true")
+    args = ap.parse_args()
+
+    url = f"http://127.0.0.1:{args.port}/"
+    if already_running(url):
+        print(f"Keymap UI is already running on {url}")
+        if not args.no_browser:
+            webbrowser.open(url)
+        return
+
+    hub = Hub()
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(hub, None))
+    except OSError as e:
+        sys.exit(f"Can't listen on port {args.port}: {e}. Try --port <other port>.")
+    monitor = KeyMonitor(hub.on_device_line, port=args.serial).start()
+    server.RequestHandlerClass = make_handler(hub, monitor)
+    server.daemon_threads = True
+    threading.Thread(target=watch_keymap, args=(hub,), daemon=True).start()
+    print(f"Keymap UI on {url} (Ctrl+C to quit)", flush=True)
+    if not args.no_browser:
+        threading.Timer(0.5, webbrowser.open, args=(url,)).start()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try:  # never leave a key stuck down
+            for pos in list(hub.injected):
+                monitor.press(pos, False)
+        except Exception:
+            traceback.print_exc()
+        monitor.stop()
+
+
+if __name__ == "__main__":
+    main()

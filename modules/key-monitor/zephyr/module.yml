@@ -1,0 +1,6 @@
+name: key-monitor
+build:
+  cmake: .
+  kconfig: Kconfig
+  settings:
+    snippet_root: .

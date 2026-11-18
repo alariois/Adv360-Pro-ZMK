@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Adv360 Keymap</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #6b7385; --line: #d9dde5;
+    --key: #ffffff; --key-edge: #c9ced8; --key-text: #1d2330; --sub: #7a8294;
+    --accent: #2f6fed; --accent-text: #ffffff; --trans: #a3a9b6; --latched: #e0882f;
+    --ok: #1f9d55; --bad: #d64545; --chip: #eef0f4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161b; --panel: #1c1f26; --text: #e6e8ee; --muted: #9098a9; --line: #2c313b;
+      --key: #252932; --key-edge: #383e4a; --key-text: #e6e8ee; --sub: #9098a9;
+      --accent: #4c86ff; --accent-text: #ffffff; --trans: #5d6473; --latched: #f0a04b;
+      --ok: #3fbf74; --bad: #ff6b6b; --chip: #262a33;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1280px; margin: 0 auto; padding: 16px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 12px; }
+  h1 { font-size: 18px; margin: 0 8px 0 0; font-weight: 600; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
+          background: var(--chip); color: var(--muted); font-size: 13px; }
+  .pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--bad); }
+  .pill.ok::before { background: var(--ok); }
+  .layers { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { border: 1px solid var(--line); background: var(--panel); color: var(--muted); border-radius: 8px;
+          padding: 4px 10px; font: inherit; cursor: pointer; }
+  .chip .n { opacity: .6; margin-right: 4px; font-variant-numeric: tabular-nums; }
+  .chip.active { color: var(--text); border-color: var(--accent); }
+  .chip.top { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .chip.pinned { outline: 2px dashed var(--latched); outline-offset: 1px; }
+  .spacer { flex: 1; }
+  button.small { border: 1px solid var(--line); background: var(--panel); color: var(--text);
+                 border-radius: 8px; padding: 4px 10px; font: inherit; cursor: pointer; }
+  button.small:hover, .chip:hover { border-color: var(--accent); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+  #error { display: none; color: var(--bad); margin-bottom: 12px; white-space: pre-wrap; }
+  svg { width: 100%; height: auto; display: block; user-select: none; touch-action: none; }
+  .key rect { fill: var(--key); stroke: var(--key-edge); stroke-width: 2; transition: fill .05s; }
+  .key text { fill: var(--key-text); text-anchor: middle; dominant-baseline: central; pointer-events: none;
+              font-family: system-ui, sans-serif; }
+  .key text.sub { fill: var(--sub); }
+  .key { cursor: pointer; }
+  .key:hover rect { stroke: var(--accent); }
+  .key.trans text.main { fill: var(--trans); }
+  .key.none rect { opacity: .45; }
+  .key.down rect { fill: var(--accent); stroke: var(--accent); }
+  .key.down text, .key.down text.sub { fill: var(--accent-text); }
+  .key.latched rect { stroke: var(--latched); stroke-width: 6; }
+  .hint { color: var(--muted); font-size: 13px; margin: 8px 2px 0; }
+  .out-head { display: flex; align-items: center; gap: 8px; margin: 16px 0 6px; }
+  .out-head h2 { font-size: 14px; margin: 0; font-weight: 600; }
+  textarea { width: 100%; min-height: 140px; resize: vertical; border-radius: 12px; padding: 12px;
+             border: 1px solid var(--line); background: var(--panel); color: var(--text);
+             font: 15px/1.5 ui-monospace, "JetBrains Mono", Menlo, monospace; }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  details { margin-top: 16px; }
+  summary { cursor: pointer; color: var(--muted); }
+  #log { max-height: 220px; overflow: auto; margin: 8px 0 0; font: 12px/1.45 ui-monospace, Menlo, monospace;
+         color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Adv360 keymap</h1>
+    <span id="status" class="pill">connecting…</span>
+    <div id="layers" class="layers"></div>
+    <span class="spacer"></span>
+    <button class="small" id="release" title="Release every key held from this page">Release all</button>
+  </header>
+  <div id="error" class="panel"></div>
+  <div class="panel"><svg id="board"></svg></div>
+  <p class="hint" id="hint">Click a key to press it on the keyboard (hold the mouse button to hold the key).
+    Shift-click or right-click latches a key down until you click it again. Click a layer to pin the view.</p>
+
+  <div class="out-head"><h2>Output</h2><span class="hint" style="margin:0">what the computer receives, typed by the
+    keyboard or by clicking keys above</span><span class="spacer"></span><button class="small" id="clear">Clear</button></div>
+  <textarea id="out" spellcheck="false" autofocus placeholder="Type on the keyboard or click keys…"></textarea>
+
+  <details><summary>Device log</summary><pre id="log"></pre></details>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const SVG = "http://www.w3.org/2000/svg";
+let km = null;            // {layout, layers}
+let dev = { connected: false, hello: null, layers: 0, highest: 0, pressed: [] };
+let pinned = null;        // layer index pinned in the view, or null to follow the keyboard
+const held = new Set();   // keys held via pointer
+const latched = new Set();// keys latched via shift/right click
+let keyEls = [];
+
+const canInject = () => dev.connected && /inject=1/.test(dev.hello || "");
+
+function activeLayers() {
+  const out = [0];
+  for (let i = 1; i < 32; i++) if ((dev.layers >>> i) & 1) out.push(i);
+  return out;
+}
+
+async function loadKeymap() {
+  try {
+    const r = await fetch("/api/keymap");
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error);
+    km = j;
+    $("error").style.display = "none";
+    buildBoard();
+    render();
+  } catch (e) {
+    $("error").textContent = "Keymap could not be parsed: " + e.message;
+    $("error").style.display = "block";
+  }
+}
+
+function buildBoard() {
+  const svg = $("board");
+  svg.replaceChildren();
+  keyEls = [];
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  km.layout.forEach((k, pos) => {
+    // bounding box of the rotated key
+    const a = k.rot * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+    for (const [px, py] of [[k.x, k.y], [k.x + k.w, k.y], [k.x, k.y + k.h], [k.x + k.w, k.y + k.h]]) {
+      const dx = px - k.rx, dy = py - k.ry;
+      const x = k.rx + dx * c - dy * s, y = k.ry + dx * s + dy * c;
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+    }
+    const g = document.createElementNS(SVG, "g");
+    g.classList.add("key");
+    if (k.rot) g.setAttribute("transform", `rotate(${k.rot} ${k.rx} ${k.ry})`);
+    const rect = document.createElementNS(SVG, "rect");
+    Object.entries({ x: k.x + 4, y: k.y + 4, width: k.w - 8, height: k.h - 8, rx: 12 })
+      .forEach(([n, v]) => rect.setAttribute(n, v));
+    const main = document.createElementNS(SVG, "text");
+    main.classList.add("main");
+    main.setAttribute("x", k.x + k.w / 2);
+    const sub = document.createElementNS(SVG, "text");
+    sub.classList.add("sub");
+    sub.setAttribute("x", k.x + k.w / 2);
+    sub.setAttribute("y", k.y + k.h - 22);
+    sub.setAttribute("font-size", 15);
+    const title = document.createElementNS(SVG, "title");
+    g.append(rect, main, sub, title);
+    g.addEventListener("pointerdown", (e) => onKeyDown(e, pos, g));
+    g.addEventListener("pointerup", () => onKeyUp(pos));
+    g.addEventListener("pointercancel", () => onKeyUp(pos));
+    svg.append(g);
+    keyEls.push({ g, main, sub, title, k });
+  });
+  const pad = 10;
+  svg.setAttribute("viewBox", `${minX - pad} ${minY - pad} ${maxX - minX + 2 * pad} ${maxY - minY + 2 * pad}`);
+}
+
+function bindingFor(pos) {
+  // Pinned: show that layer as written. Following: walk down the active
+  // layers past &trans like ZMK does, and dim keys that fell through.
+  if (pinned !== null) return { key: km.layers[pinned].keys[pos], fell: false };
+  const act = activeLayers().filter((l) => l < km.layers.length).sort((a, b) => b - a);
+  for (const l of act) {
+    const key = km.layers[l].keys[pos];
+    if (key.binding !== "&trans") return { key, fell: l !== act[0], layer: l };
+  }
+  return { key: km.layers[0].keys[pos], fell: false };
+}
+
+function render() {
+  const status = $("status");
+  status.className = "pill" + (dev.connected ? " ok" : "");
+  status.textContent = dev.connected
+    ? (canInject() ? "live · injection on" : "live · read only")
+    : "no test firmware connected (keymap only)";
+
+  if (!km) return;
+  const act = new Set(activeLayers());
+  const top = Math.max(...act);
+  const chips = $("layers");
+  chips.replaceChildren(...km.layers.map((L) => {
+    const b = document.createElement("button");
+    b.className = "chip" + (act.has(L.index) ? " active" : "") + (L.index === top ? " top" : "")
+      + (pinned === L.index ? " pinned" : "");
+    b.innerHTML = `<span class="n">${L.index}</span>`;
+    b.append(L.display_name);
+    b.title = pinned === L.index ? "Unpin (follow the keyboard)" : "Pin this layer in the view";
+    b.onclick = () => { pinned = pinned === L.index ? null : L.index; render(); };
+    return b;
+  }));
+
+  const down = new Set(dev.pressed);
+  keyEls.forEach(({ g, main, sub, title, k }, pos) => {
+    const { key, fell, layer } = bindingFor(pos);
+    const label = key.label;
+    main.textContent = label;
+    main.setAttribute("font-size", label.length > 7 ? 15 : label.length > 4 ? 19 : label.length > 2 ? 24 : 30);
+    main.setAttribute("y", k.y + k.h / 2 - (key.sub ? 8 : 0));
+    sub.textContent = key.sub;
+    title.textContent = `#${pos}  ${key.binding}` + (fell ? `  (from layer ${km.layers[layer].display_name})` : "");
+    g.classList.toggle("trans", fell || key.binding === "&trans");
+    g.classList.toggle("none", key.binding === "&none");
+    g.classList.toggle("down", down.has(pos));
+    g.classList.toggle("latched", latched.has(pos));
+  });
+}
+
+async function send(pos, pressed) {
+  const r = await fetch("/api/key", { method: "POST", headers: { "Content-Type": "application/json" },
+                                      body: JSON.stringify({ pos, pressed }) });
+  if (!r.ok) log("! " + (await r.json()).error);
+}
+
+function onKeyDown(e, pos, g) {
+  e.preventDefault();          // keep the focus (and the typed output) in the text box
+  $("out").focus();
+  if (!canInject()) { log("! flash the test firmware (bin/flash.sh --test) to press keys from here"); return; }
+  if (e.shiftKey || e.button === 2) {
+    if (latched.delete(pos)) send(pos, false); else { latched.add(pos); send(pos, true); }
+    render();
+    return;
+  }
+  if (latched.has(pos)) return;
+  held.add(pos);
+  g.setPointerCapture(e.pointerId);
+  send(pos, true);
+}
+
+function onKeyUp(pos) {
+  if (held.delete(pos)) send(pos, false);
+}
+
+function log(line) {
+  const el = $("log");
+  el.textContent = (el.textContent + line + "\n").split("\n").slice(-300).join("\n");
+  el.scrollTop = el.scrollHeight;
+}
+
+$("board").addEventListener("contextmenu", (e) => e.preventDefault());
+$("clear").onclick = () => { $("out").value = ""; $("out").focus(); };
+$("release").onclick = async () => {
+  latched.clear(); held.clear();
+  await fetch("/api/release-all", { method: "POST" });
+  render();
+};
+window.addEventListener("blur", () => { for (const pos of held) send(pos, false); held.clear(); });
+
+const es = new EventSource("/api/events");
+es.addEventListener("device", (e) => {
+  const d = JSON.parse(e.data);
+  if (d.line) log(d.line);
+  const wasConnected = dev.connected;
+  dev = d.state;
+  if (wasConnected && !dev.connected) latched.clear();
+  render();
+});
+es.addEventListener("keymap", () => { log("keymap file changed, reloading"); loadKeymap(); });
+es.onerror = () => { $("status").className = "pill"; $("status").textContent = "server not running"; };
+
+loadKeymap();
+</script>
+</body>
+</html>

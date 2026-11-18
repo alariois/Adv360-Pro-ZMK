@@ -1,0 +1,34 @@
+config ZMK_KEY_MONITOR
+	bool "Stream key positions and layer state over a USB serial port"
+	depends on USB_CDC_ACM && UART_INTERRUPT_DRIVEN && UART_LINE_CTRL
+	depends on !ZMK_SPLIT || ZMK_SPLIT_ROLE_CENTRAL
+	help
+	  TEST BUILDS ONLY. Every key press is sent to whoever opens the
+	  serial port (the chosen zmk,key-monitor-uart), i.e. a keylogger for
+	  local programs. Enable it with the key-monitor snippet.
+
+	  Protocol, one ASCII line per message:
+	    device -> host  "H key-monitor <version> inject=<0|1> keys=<n>"
+	                    "P <position> <1|0>"   key pressed / released
+	                    "L <layer mask hex> <highest layer>"
+	    host -> device  "?"                    resend H and L
+	                    "K <position> <1|0>"   inject a press / release
+
+config ZMK_KEY_MONITOR_INJECT
+	bool "Accept injected key presses from the host"
+	depends on ZMK_KEY_MONITOR
+	help
+	  TEST BUILDS ONLY. Lets any local program with access to the serial
+	  port press keys, as if typed on the keyboard (also over Bluetooth).
+
+if ZMK_KEY_MONITOR
+
+config ZMK_KEY_MONITOR_THREAD_STACK_SIZE
+	int "Stack size of the key monitor thread"
+	default 1024
+
+config ZMK_KEY_MONITOR_THREAD_PRIORITY
+	int "Priority of the key monitor thread"
+	default 10
+
+endif

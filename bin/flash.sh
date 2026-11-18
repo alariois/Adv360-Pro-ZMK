@@ -14,6 +14,9 @@
 #
 # Usage: bin/flash.sh [options]
 #   --no-build        don't run `make`, flash the newest firmware/*.uf2
+#   --test            build/flash the TEST flavor: the left half gets the
+#                     key-monitor port that streams and injects key presses.
+#                     Flash without --test to go back to daily firmware.
 #   --left | --right  flash only one half
 #   --reset           flash settings-reset.uf2 first (needs a manual
 #                     bootloader key press afterwards, the reset firmware has
@@ -32,12 +35,14 @@ CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/adv360-flash/serials"
 build=true
 sides=(left right)
 reset=false
+flavor=""
 timeout=30
 declare -A FW=()
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --no-build) build=false ;;
+        --test) flavor="-test" ;;
         --left) sides=(left) ;;
         --right) sides=(right) ;;
         --reset) reset=true ;;
@@ -198,14 +203,14 @@ wait_for_boot() {
 
 if $build; then
     log "Building firmware"
-    make -C "$ROOT"
+    if [ -n "$flavor" ]; then make -C "$ROOT" test; else make -C "$ROOT"; fi
 fi
 
 [ ${#FW[@]} -eq 2 ] && sides=(left right)
 for side in "${sides[@]}"; do
     [ -n "${FW[$side]:-}" ] && { [ -f "${FW[$side]}" ] || die "No such file: ${FW[$side]}"; SERIAL[$side]=""; continue; }
-    FW[$side]="$(ls -1t "$ROOT"/firmware/*-"$side"*.uf2 2>/dev/null | head -n1 || true)"
-    [ -n "${FW[$side]}" ] || die "No firmware/*-$side*.uf2 found, run without --no-build"
+    FW[$side]="$(ls -1t "$ROOT"/firmware/*-"$side$flavor"-clique.uf2 2>/dev/null | head -n1 || true)"
+    [ -n "${FW[$side]}" ] || die "No firmware/*-$side$flavor-clique.uf2 found, run without --no-build"
     SERIAL[$side]=""
 done
 
