@@ -83,6 +83,49 @@ class Keyboard:
                            f"on layer {L['display_name']!r}")
         return found[nth]
 
+    def char_map(self):
+        """{char: (how, position)} for every character the keymap can type
+        with one key: how is "plain" (Base layer), "shift" (Base key with
+        left Shift held) or "hexpad" (tap the Hexpad key first). Built from
+        the labels, so it follows keymap changes."""
+        if getattr(self, "_char_map", None) is None:
+            base, lshift, hexpad = (self.layer(n)["keys"] for n in ("Base", "LShift", "Hexpad"))
+            chars = {" ": ("plain", self.key("Space"))}
+            for pos, k in enumerate(base):
+                label, sub = k["label"], k["sub"]
+                if len(label) == 1:
+                    chars.setdefault(label.lower() if label.isalpha() else label, ("plain", pos))
+                over = lshift[pos]
+                if over["binding"] != "&trans":
+                    shifted = over["label"] if len(over["label"]) == 1 else None
+                elif label.isalpha() and len(label) == 1:
+                    shifted = label.upper()
+                else:
+                    shifted = sub if len(sub) == 1 else None
+                if shifted:
+                    chars.setdefault(shifted, ("shift", pos))
+            for pos, k in enumerate(hexpad):
+                label = k["label"]
+                if len(label) == 1 and k["binding"] != "&trans":
+                    chars.setdefault(label.lower() if label.isalpha() else label, ("hexpad", pos))
+            self._char_map = chars
+        return self._char_map
+
+    def type(self, text):
+        """Type text the way a person would on this keymap (see char_map)."""
+        chars = self.char_map()
+        for ch in text:
+            if ch not in chars:
+                raise E2EError(f"don't know how to type {ch!r} with one key")
+            how, pos = chars[ch]
+            if how == "plain":
+                self.tap(pos)
+            elif how == "shift":
+                with self.hold(self.key("Shift", sub="LShift")):
+                    self.tap(pos)
+            else:
+                self.tap(self.key("Hexpad", sub="sticky"), pos)
+
     def binding(self, pos, layer="Base"):
         return self.layer(layer)["keys"][pos]["binding"]
 

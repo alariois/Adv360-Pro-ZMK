@@ -44,3 +44,27 @@ class TestCapsWordHexpad(E2ETestCase):
         kb.tap(kb.key("Space"))
         self.type_hexpad("ef")
         self.assertTyped("AB:CD ef")
+
+
+class TestCapsWordDash(E2ETestCase):
+    """Caps word continues through '-' (CONSTANT-NAMES, UUID-LIKE-IDS)."""
+
+    def caps_word(self):
+        kb = self.kb
+        with kb.hold(kb.key("Shift", sub="LShift")):
+            kb.tap(kb.key("Shift", sub="RShift"))
+
+    def test_dash_keeps_caps_word(self):
+        self.caps_word()
+        self.kb.type("foo-bar")
+        self.assertTyped("FOO-BAR")
+
+    def test_dash_and_underscore_mix(self):
+        self.caps_word()
+        self.kb.type("a-b_c")
+        self.assertTyped("A-B_C")
+
+    def test_space_still_ends_caps_word(self):
+        self.caps_word()
+        self.kb.type("ab-cd ef")
+        self.assertTyped("AB-CD ef")
