@@ -1,0 +1,4 @@
+name: usb-bootloader-reset
+build:
+  cmake: .
+  kconfig: Kconfig

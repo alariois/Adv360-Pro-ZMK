@@ -1,0 +1,14 @@
+/*
+ * The right half has no ZMK Studio serial port, so give it a CDC ACM port
+ * dedicated to the 1200-baud bootloader reset. The left half reuses the
+ * Studio port added by the studio-rpc-usb-uart snippet.
+ *
+ * NOTE: don't add a config/adv360.overlay - ZMK picks only the first
+ * matching overlay and adv360.overlay would shadow this file.
+ */
+
+&zephyr_udc0 {
+    bootloader_reset_cdc_acm: bootloader_reset_cdc_acm {
+        compatible = "zephyr,cdc-acm-uart";
+    };
+};

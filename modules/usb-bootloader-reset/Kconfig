@@ -1,0 +1,22 @@
+config ZMK_USB_BOOTLOADER_RESET
+	bool "Reboot into the UF2 bootloader on a USB CDC ACM baud-rate 'touch'"
+	depends on USB_CDC_ACM
+	select CDC_ACM_DTE_RATE_CALLBACK_SUPPORT
+	help
+	  Registers a DTE rate callback on every zephyr,cdc-acm-uart instance.
+	  When the host sets the magic baud rate (1200 by default, the classic
+	  Arduino/Adafruit "1200 baud touch"), the device writes the UF2
+	  bootloader magic into GPREGRET and reboots, exactly like the
+	  &bootloader behavior does.
+
+if ZMK_USB_BOOTLOADER_RESET
+
+config ZMK_USB_BOOTLOADER_RESET_BAUD
+	int "Magic baud rate that triggers the reboot"
+	default 1200
+
+config ZMK_USB_BOOTLOADER_RESET_DELAY_MS
+	int "Delay before rebooting, lets the USB control transfer finish"
+	default 100
+
+endif
