@@ -217,11 +217,12 @@ class Keyboard:
         self.down.clear()
 
     def wait_idle(self, timeout=3.0):
-        """Wait until only the base layer is active (sticky layers time out)."""
+        """Wait until only the base layer is active (sticky layers time out).
+        Bit 0 is ignored: after &to 0 ZMK reports the base layer explicitly."""
         deadline = time.monotonic() + timeout
-        while self.layer_mask and time.monotonic() < deadline:
+        while self.layer_mask & ~1 and time.monotonic() < deadline:
             time.sleep(0.05)
-        if self.layer_mask:
+        if self.layer_mask & ~1:
             raise E2EError(f"layers still active after {timeout}s: mask {self.layer_mask:#x}")
 
 
