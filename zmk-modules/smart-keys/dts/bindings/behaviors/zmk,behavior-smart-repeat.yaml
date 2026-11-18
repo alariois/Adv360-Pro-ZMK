@@ -1,0 +1,7 @@
+description: |
+  Repeat key that replays everything the last key typed: whole macros,
+  Ctrl+Shift+U unicode entry, with the exact modifiers. Skips Space.
+
+compatible: "zmk,behavior-smart-repeat"
+
+include: zero_param.yaml

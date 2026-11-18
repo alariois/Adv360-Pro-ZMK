@@ -8,3 +8,21 @@ config ZMK_MOD_MORPH_UNMASK_ON_NEXT_KEY
 	  mod-morph key is released, and comes out without Shift ('>l' instead
 	  of '>L'). With this option the mask is cleared as soon as another key
 	  is pressed; the mod-morph's own key press was already sent by then.
+
+config ZMK_BEHAVIOR_SMART_REPEAT
+	bool
+	default y
+	depends on DT_HAS_ZMK_BEHAVIOR_SMART_REPEAT_ENABLED
+	depends on !ZMK_SPLIT || ZMK_SPLIT_ROLE_CENTRAL
+
+if ZMK_BEHAVIOR_SMART_REPEAT
+
+config ZMK_SMART_REPEAT_MAX_KEYS
+	int "Most keycodes one repeat replays (macros, unicode entry)"
+	default 32
+
+config ZMK_SMART_REPEAT_STEP_MS
+	int "Delay between replayed key presses/releases of a multi-key recording"
+	default 5
+
+endif

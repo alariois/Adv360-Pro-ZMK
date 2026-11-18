@@ -116,6 +116,13 @@
                 ignore-modifiers;
                 bindings = <&mo>;
         };
+    // Repeat key: replays whatever the last key typed (whole macros, unicode
+    // entry, exact modifiers), skips Space. zmk-modules/smart-keys.
+    repeat: smart_repeat {
+                compatible = "zmk,behavior-smart-repeat";
+                #binding-cells = <0>;
+                display-name = "Repeat";
+        };
     percent_at: percent_at {
                 compatible = "zmk,behavior-mod-morph";
                 label = "percent_at";
@@ -132,11 +139,11 @@
       display-name = "Base";
       // Right thumb, stock PgDn position: &sl_hex 5 temporarily replaces &macro_lalt_mo_1
       bindings = <
-        &hash_tilde        &percent_at        &kp LEFT_BRACE           &kp LEFT_PARENTHESIS &macro_plus &key_repeat &to 1                                                                                              &mo 4         &key_repeat &kp ASTRK    &kp RIGHT_PARENTHESIS &kp RIGHT_BRACE &macro_equal &kp EXCL
+        &hash_tilde        &percent_at        &kp LEFT_BRACE           &kp LEFT_PARENTHESIS &macro_plus &repeat &to 1                                                                                              &mo 4         &repeat &kp ASTRK    &kp RIGHT_PARENTHESIS &kp RIGHT_BRACE &macro_equal &kp EXCL
         &kp TAB            &comma_tilde       &double_quotes_less_than &sqt_greater_than    &kp P       &kp Y       &macro_colon                                                                                       &macro_semi   &kp F       &kp G        &kp C                 &kp R           &kp L        &bslh_pipe
         &kp ESC            &kp A              &kp O                    &kp E                &kp U       &kp I       &macro_fslh            &macro_lctrl_mo_1 &macro_lgui_mo_1 &macro_lgui_mo_1 &macro_rctrl_mo_1       &macro_dollar &kp D       &kp H        &kp T                 &kp N           &kp S        &macro_minus
         &macro_lshift_mo_6 &dot_ampersand_tap &kp Q                    &kp J                &kp K       &kp X                                                &sl 3            &sl 3                                                  &kp B       &kp M        &kp W                 &kp V           &kp Z        &macro_rshift_mo_7
-        &key_repeat        &kp LEFT           &kp RIGHT                &macro_dollar        &macro_semi                          &kp SPACE &kp ENTER         &macro_lalt_mo_1 &sl_hex 5           &kp BSPC          &sl_hex 5                          &macro_colon &macro_fslh           &kp DOWN        &kp UP       &key_repeat
+        &repeat        &kp LEFT           &kp RIGHT                &macro_dollar        &macro_semi                          &kp SPACE &kp ENTER         &macro_lalt_mo_1 &sl_hex 5           &kp BSPC          &sl_hex 5                          &macro_colon &macro_fslh           &kp DOWN        &kp UP       &repeat
       >;
     };
 
