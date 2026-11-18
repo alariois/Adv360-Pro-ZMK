@@ -171,3 +171,30 @@ class TestRepeatWhileHeld(RepeatTestCase):
 
     def test_hexpad_digit(self):
         self.held("7", ["R+", "R-", "K-"])
+
+
+class TestRepeatCapsWordAndLayers(RepeatTestCase):
+
+    def caps_word(self):
+        kb = self.kb
+        with kb.hold(self.lshift):
+            kb.tap(kb.key("Shift", sub="RShift"))
+
+    def test_repeat_during_caps_word(self):
+        self.caps_word()
+        self.kb.type("ab")
+        self.kb.tap(self.repeat)
+        self.assertTyped("ABB")
+
+    def test_repeat_after_caps_word_ended(self):
+        """The letter was typed uppercase, so it repeats uppercase."""
+        self.caps_word()
+        self.kb.type("ab ")
+        self.kb.tap(self.repeat)
+        self.assertTyped("AB B")
+
+    def test_fn_layer_degree(self):
+        kb = self.kb
+        kb.tap(kb.key("Fn", sub="sticky"), kb.key("°", layer="Fn"))
+        kb.tap(self.repeat)
+        self.assertTyped("°°")

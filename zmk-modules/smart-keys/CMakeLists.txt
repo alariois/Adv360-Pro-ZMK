@@ -6,9 +6,11 @@ target_sources_ifdef(CONFIG_ZMK_MOD_MORPH_UNMASK_ON_NEXT_KEY app PRIVATE src/mod
 
 if(CONFIG_ZMK_BEHAVIOR_SMART_REPEAT)
   target_sources(app PRIVATE src/smart_repeat.c src/masked_mods.c)
-  # masked_mods.c observes mod-morph masking (hid.c keeps it private)
+  # masked_mods.c observes mod-morph masking (hid.c keeps it private) and the
+  # implicit modifiers really applied to each key (caps word)
   zephyr_ld_options(-Wl,--wrap=zmk_hid_masked_modifiers_set
-                    -Wl,--wrap=zmk_hid_masked_modifiers_clear)
+                    -Wl,--wrap=zmk_hid_masked_modifiers_clear
+                    -Wl,--wrap=zmk_hid_implicit_modifiers_press)
 endif()
 
 target_sources_ifdef(CONFIG_ZMK_BEHAVIOR_ONESHOT_LAYER app PRIVATE src/oneshot_layer.c)

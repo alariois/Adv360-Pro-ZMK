@@ -50,6 +50,7 @@ static uint8_t rec_len;
 static bool new_group = true; /* the next recorded keycode starts a new recording */
 static bool unicode_session;
 static bool replaying; /* our own replayed keycodes aren't recorded */
+static int pending_item = -1; /* last recorded item, until the HID listener applied it */
 
 bool smart_keys_unicode_active(void) { return unicode_session; }
 
@@ -67,8 +68,18 @@ static bool ends_unicode(uint16_t id) {
 
 static void append(const struct rec_item *it) {
     if (rec_len < ARRAY_SIZE(rec)) {
+        pending_item = rec_len;
         rec[rec_len++] = *it;
     }
+}
+
+/* Caps word (and anything else after us) may add implicit modifiers to the
+ * event we just recorded; take what the HID listener really applied. */
+void smart_keys_implicit_mods_applied(zmk_mod_flags_t implicit_modifiers) {
+    if (pending_item >= 0 && pending_item < rec_len) {
+        rec[pending_item].mods |= implicit_modifiers;
+    }
+    pending_item = -1;
 }
 
 static void record(const struct zmk_keycode_state_changed *ev) {
@@ -121,6 +132,9 @@ static int smart_repeat_listener(const zmk_event_t *eh) {
     }
 
     const struct zmk_keycode_state_changed *ev = as_zmk_keycode_state_changed(eh);
+    if (ev != NULL && ev->state) {
+        pending_item = -1;
+    }
     if (ev != NULL && ev->state && !replaying && ev->usage_page == HID_USAGE_KEY &&
         !is_mod(ev->usage_page, ev->keycode)) {
         record(ev);

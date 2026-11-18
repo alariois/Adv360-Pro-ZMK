@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <zephyr/toolchain.h>
 #include <zmk/hid.h>
 
 #include "smart_keys.h"
@@ -27,3 +28,15 @@ int __wrap_zmk_hid_masked_modifiers_clear(void) {
 }
 
 zmk_mod_flags_t smart_keys_masked_mods(void) { return masked; }
+
+/* The HID listener applies a key's implicit modifiers after every other
+ * listener (e.g. caps word adding Shift) had its say: report them to the
+ * repeat recorder. */
+int __real_zmk_hid_implicit_modifiers_press(zmk_mod_flags_t implicit_modifiers);
+
+__weak void smart_keys_implicit_mods_applied(zmk_mod_flags_t implicit_modifiers) {}
+
+int __wrap_zmk_hid_implicit_modifiers_press(zmk_mod_flags_t implicit_modifiers) {
+    smart_keys_implicit_mods_applied(implicit_modifiers);
+    return __real_zmk_hid_implicit_modifiers_press(implicit_modifiers);
+}
