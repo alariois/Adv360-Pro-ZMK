@@ -21,6 +21,9 @@
 #include <zmk/events/layer_state_changed.h>
 #include <zmk/events/position_state_changed.h>
 #include <zmk/keymap.h>
+#if IS_ENABLED(CONFIG_ZMK_HID_INDICATORS)
+#include <zmk/hid_indicators.h>
+#endif
 #include <zmk/matrix.h>
 
 LOG_MODULE_REGISTER(key_monitor, CONFIG_ZMK_LOG_LEVEL);
@@ -87,7 +90,7 @@ ZMK_SUBSCRIPTION(key_monitor, zmk_layer_state_changed);
 /* ---- host -> device ---------------------------------------------------- */
 
 struct command {
-    char type; /* 'K' inject, '?' hello */
+    char type; /* 'K' inject, '?' hello, 'I' indicators */
     uint8_t state;
     uint16_t position;
 };
@@ -102,6 +105,7 @@ static void handle_line(char *line) {
 
     switch (line[0]) {
     case '?':
+    case 'I':
         break;
     case 'K': {
         char *end;
@@ -166,6 +170,15 @@ static void process_commands(struct k_work *work) {
     while (k_msgq_get(&command_queue, &cmd, K_NO_WAIT) == 0) {
         if (cmd.type == '?') {
             send_hello();
+        } else if (cmd.type == 'I') {
+            char buf[16];
+#if IS_ENABLED(CONFIG_ZMK_HID_INDICATORS)
+            /* What the LEDs show (caps lock includes smart-keys caps word) */
+            snprintf(buf, sizeof(buf), "I %x\n", zmk_hid_indicators_get_current_profile());
+#else
+            snprintf(buf, sizeof(buf), "I 0\n");
+#endif
+            send_line(buf);
         } else if (cmd.type == 'K') {
 #if IS_ENABLED(CONFIG_ZMK_KEY_MONITOR_INJECT)
             raise_zmk_position_state_changed((struct zmk_position_state_changed){

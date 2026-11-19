@@ -7,6 +7,9 @@
  *    (explicit mods minus mod-morph masking, plus implicit mods), and is
  *    replayed with exactly those: modifiers held while pressing repeat are
  *    masked. '=' typed with Shift held replays as '=', '>' as '>'.
+ *  - Except the case of letters: a letter (also a compose letter like ö)
+ *    takes Shift from when repeat is pressed (Shift held, caps word), not
+ *    from when it was typed. Ö + repeat = Öö, Shift+repeat = ÖÖ.
  *  - Ctrl+Shift+U unicode entry is one recording, up to and including the
  *    Enter/Space that ends it.
  *  - Modifier-only and layer keys don't replace the recording, and neither
@@ -150,19 +153,48 @@ ZMK_SUBSCRIPTION(smart_repeat, zmk_keycode_state_changed);
 
 static struct rec_item play[CONFIG_ZMK_SMART_REPEAT_MAX_KEYS];
 static uint8_t play_len, play_idx;
+static int play_letter = -1; /* item whose Shift follows the current state */
 static bool play_release_next;
 static bool single_held;
 
-static void send(const struct rec_item *it, bool pressed) {
+#define SHIFT_MODS (MOD_LSFT | MOD_RSFT)
+
+static bool is_alpha(const struct rec_item *it) {
+    return it->page == HID_USAGE_KEY && it->id >= HID_USAGE_KEY_KEYBOARD_A &&
+           it->id <= HID_USAGE_KEY_KEYBOARD_Z;
+}
+
+/* The letter of a letter recording: a single letter key, or a compose
+ * macro (ScrollLock, accent, letter) whose accent isn't a letter (° is
+ * ScrollLock o o). -1 for everything else (symbols, unicode entry). */
+static int letter_item(const struct rec_item *r, uint8_t n) {
+    if (n == 0 || !is_alpha(&r[n - 1])) {
+        return -1;
+    }
+    if (n == 1) {
+        return 0;
+    }
+    if (n == 3 && r[0].page == HID_USAGE_KEY && r[0].id == HID_USAGE_KEY_KEYBOARD_SCROLL_LOCK &&
+        !is_alpha(&r[1])) {
+        return 2;
+    }
+    return -1;
+}
+
+static void send(const struct rec_item *it, bool pressed, bool letter) {
+    /* Exactly the recorded modifiers, hiding whatever else is held; a
+     * letter's Shift comes from the current state instead. */
+    zmk_mod_flags_t mods = letter ? (it->mods & ~SHIFT_MODS) : it->mods;
+    zmk_mod_flags_t visible = letter ? (mods | SHIFT_MODS) : mods;
+
     if (pressed) {
-        /* Exactly the recorded modifiers: hide whatever else is held. */
-        zmk_hid_masked_modifiers_set(zmk_hid_get_explicit_mods() & ~it->mods);
+        zmk_hid_masked_modifiers_set(zmk_hid_get_explicit_mods() & ~visible);
     }
     replaying = true;
     raise_zmk_keycode_state_changed((struct zmk_keycode_state_changed){
         .usage_page = it->page,
         .keycode = it->id,
-        .implicit_modifiers = it->mods,
+        .implicit_modifiers = mods,
         .explicit_modifiers = 0,
         .state = pressed,
         .timestamp = k_uptime_get(),
@@ -181,7 +213,7 @@ static void play_step(struct k_work *work) {
     if (play_idx >= play_len) {
         return;
     }
-    send(&play[play_idx], !play_release_next);
+    send(&play[play_idx], !play_release_next, play_idx == play_letter);
     if (play_release_next) {
         play_idx++;
     }
@@ -199,9 +231,10 @@ static int on_smart_repeat_pressed(struct zmk_behavior_binding *binding,
 
     memcpy(play, rec, rec_len * sizeof(rec[0]));
     play_len = rec_len;
+    play_letter = letter_item(play, play_len);
 
     if (play_len == 1) {
-        send(&play[0], true);
+        send(&play[0], true, play_letter == 0);
         single_held = true;
     } else {
         play_idx = 0;
@@ -215,7 +248,7 @@ static int on_smart_repeat_released(struct zmk_behavior_binding *binding,
                                     struct zmk_behavior_binding_event event) {
     if (single_held) {
         single_held = false;
-        send(&play[0], false);
+        send(&play[0], false, play_letter == 0);
     }
     return ZMK_BEHAVIOR_OPAQUE;
 }

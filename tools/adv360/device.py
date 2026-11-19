@@ -2,8 +2,8 @@
 
 Protocol (see zmk-modules/key-monitor/Kconfig):
   device -> host  "H key-monitor <ver> inject=<0|1> keys=<n>", "P <pos> <1|0>",
-                  "L <layer mask hex> <highest layer>", "E <error>"
-  host -> device  "?", "K <pos> <1|0>"
+                  "L <layer mask hex> <highest layer>", "I <indicators hex>", "E <error>"
+  host -> device  "?", "K <pos> <1|0>", "I"
 """
 
 import os

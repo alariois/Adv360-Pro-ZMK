@@ -87,7 +87,8 @@ class Keyboard:
     def char_map(self):
         """{char: (how, position)} for every character the keymap can type
         with one key: how is "plain" (Base layer), "shift" (Base key with
-        left Shift held) or "hexpad" (tap the Hexpad key first). Built from
+        left Shift held), "hexpad" (tap the Hexpad key first) or
+        "hexpad-shift" (both: uppercase compose letters). Built from
         the labels, so it follows keymap changes."""
         if getattr(self, "_char_map", None) is None:
             base, lshift, hexpad = (self.layer(n)["keys"] for n in ("Base", "LShift", "Hexpad"))
@@ -109,6 +110,8 @@ class Keyboard:
                 label = k["label"]
                 if len(label) == 1 and k["binding"] != "&trans":
                     chars.setdefault(label.lower() if label.isalpha() else label, ("hexpad", pos))
+                    if label.isalpha():
+                        chars.setdefault(label.upper(), ("hexpad-shift", pos))
             self._char_map = chars
         return self._char_map
 
@@ -124,6 +127,9 @@ class Keyboard:
             elif how == "shift":
                 with self.hold(self.key("Shift", sub="LShift")):
                     self.tap(pos)
+            elif how == "hexpad-shift":
+                with self.hold(self.key("Shift", sub="LShift")):
+                    self.tap(self.key("Hexpad", sub="sticky"), pos)
             else:
                 self.tap(self.key("Hexpad", sub="sticky"), pos)
 
@@ -138,15 +144,15 @@ class Keyboard:
             self.layer_mask = int(line.split()[1], 16)
         self.events.put(line)
 
-    def _wait_for(self, line, timeout=2.0):
+    def _wait_for(self, line, timeout=2.0, prefix=False):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
                 got = self.events.get(timeout=max(0.0, deadline - time.monotonic()))
             except queue.Empty:
                 break
-            if got == line:
-                return
+            if got == line or (prefix and got.startswith(line)):
+                return got
             if got.startswith("E ") or got == "disconnected":
                 raise E2EError(f"keyboard said {got!r} while waiting for {line!r}")
         raise E2EError(f"keyboard didn't acknowledge {line!r} within {timeout}s")
@@ -165,6 +171,13 @@ class Keyboard:
                 return
             if got.startswith("E ") or got == "disconnected":
                 raise E2EError(f"keyboard said {got!r}")
+
+    CAPS_LOCK_LED = 0x2
+
+    def indicators(self):
+        """HID indicator bits the keyboard LEDs show (CAPS_LOCK_LED, ...)."""
+        self.monitor.send("I")
+        return int(self._wait_for("I ", prefix=True).split()[1], 16)
 
     # -- pressing keys ---------------------------------------------------------
 

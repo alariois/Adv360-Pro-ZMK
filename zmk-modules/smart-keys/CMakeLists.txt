@@ -14,3 +14,12 @@ if(CONFIG_ZMK_BEHAVIOR_SMART_REPEAT)
 endif()
 
 target_sources_ifdef(CONFIG_ZMK_BEHAVIOR_ONESHOT_LAYER app PRIVATE src/oneshot_layer.c)
+
+if(CONFIG_ZMK_BEHAVIOR_SMART_CAPS_WORD)
+  target_sources(app PRIVATE src/smart_caps_word.c)
+  if(CONFIG_ZMK_HID_INDICATORS)
+    # caps word lights the caps lock LED (the LED code polls this function)
+    target_sources(app PRIVATE src/indicators.c)
+    zephyr_ld_options(-Wl,--wrap=zmk_hid_indicators_get_current_profile)
+  endif()
+endif()

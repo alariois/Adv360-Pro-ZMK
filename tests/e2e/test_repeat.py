@@ -1,6 +1,7 @@
 """Repeat key: replays exactly what the last key typed - whole macros
 (compose letters, unicode entry), with the modifiers as they were - and
-works while the previous key is still held. Space is skipped."""
+works while the previous key is still held. Space is skipped. Letters
+(also compose letters) take Shift from when repeat is pressed instead."""
 
 from tests.e2e.harness import E2ETestCase
 
@@ -34,11 +35,13 @@ class TestRepeatEveryKey(RepeatTestCase):
         for ch, (how, pos) in sorted(kb.char_map().items()):
             if ch in NOT_TEXT or ch == " ":
                 continue
+            # letters repeat in the case of the moment (no Shift held: lower)
+            want = ch + (ch.lower() if ch.isalpha() else ch)
             self.capture.clear()
             kb.type(ch)
             kb.tap(self.repeat)
-            got = self.capture.wait_for_text(ch * 2, timeout=1)
-            if got != ch * 2:
+            got = self.capture.wait_for_text(want, timeout=1)
+            if got != want:
                 failures.append(f"{how} {ch!r} + repeat gave {got!r}")
             kb.wait_idle()
         self.assertFalse(failures, "\n  " + "\n  ".join(failures))
@@ -74,10 +77,44 @@ class TestRepeatMacros(RepeatTestCase):
 
 class TestRepeatModifiers(RepeatTestCase):
 
-    def test_shifted_letter_repeats_shifted(self):
+    def test_shifted_letter_repeats_in_current_case(self):
         self.kb.type("A")
         self.kb.tap(self.repeat)
-        self.assertTyped("AA")
+        self.assertTyped("Aa")
+
+    def test_shift_held_for_repeat_shifts_letter(self):
+        kb = self.kb
+        kb.type("a")
+        with kb.hold(self.lshift):
+            kb.tap(self.repeat)
+        kb.type("A")
+        with kb.hold(self.lshift):
+            kb.tap(self.repeat)
+        self.assertTyped("aAAA")
+
+    def test_shifted_compose_letter_repeats_lowercase(self):
+        self.kb.type("Ö")
+        self.kb.tap(self.repeat)
+        self.kb.type("Š")
+        self.kb.tap(self.repeat)
+        self.assertTyped("ÖöŠš")
+
+    def test_compose_letters_with_shift_held_for_repeat(self):
+        kb = self.kb
+        for ch in "õäöüšž":
+            kb.type(ch)
+            with kb.hold(self.lshift):
+                kb.tap(self.repeat)
+        self.assertTyped("õÕäÄöÖüÜšŠžŽ")
+
+    def test_hold_shift_through_letters_and_repeat(self):
+        kb = self.kb
+        with kb.hold(self.lshift):
+            kb.tap(self.hexpad, kb.char_map()["Ö"][1])
+            kb.tap(self.repeat)
+            kb.tap(kb.char_map()["L"][1])
+            kb.tap(self.repeat)
+        self.assertTyped("ÖÖLL")
 
     def test_shifted_symbol_repeats_without_shift(self):
         self.kb.type(">")
@@ -101,12 +138,13 @@ class TestRepeatModifiers(RepeatTestCase):
         kb.tap(self.repeat)
         self.assertTyped("```")
 
-    def test_replay_is_exact_even_if_shift_is_held(self):
+    def test_symbol_replay_is_exact_even_if_shift_is_held(self):
         kb = self.kb
-        kb.type("a")
-        with kb.hold(self.lshift):
-            kb.tap(self.repeat)
-        self.assertTyped("aa")
+        for ch in ",=7`":
+            kb.type(ch)
+            with kb.hold(self.lshift):
+                kb.tap(self.repeat)
+        self.assertTyped(",,==77``")
 
     def test_modifier_and_layer_taps_dont_replace_last_key(self):
         kb = self.kb
@@ -187,11 +225,24 @@ class TestRepeatCapsWordAndLayers(RepeatTestCase):
         self.assertTyped("ABB")
 
     def test_repeat_after_caps_word_ended(self):
-        """The letter was typed uppercase, so it repeats uppercase."""
+        """Letters follow the case of the moment: caps word is over."""
         self.caps_word()
         self.kb.type("ab ")
         self.kb.tap(self.repeat)
-        self.assertTyped("AB B")
+        self.assertTyped("AB b")
+
+    def test_repeat_compose_letter_during_caps_word(self):
+        self.caps_word()
+        self.kb.type("ö")
+        self.kb.tap(self.repeat)
+        self.kb.type("x")
+        self.assertTyped("ÖÖX")
+
+    def test_lowercase_letter_repeats_uppercase_in_caps_word(self):
+        self.kb.type("ž")
+        self.caps_word()
+        self.kb.tap(self.repeat)
+        self.assertTyped("žŽ")
 
     def test_fn_layer_degree(self):
         kb = self.kb

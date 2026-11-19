@@ -6,13 +6,6 @@
 #include <dt-bindings/zmk/backlight.h>
 #include <dt-bindings/zmk/pointing.h>
 
-// Caps word (tap both Shift keys) keeps going through ':' (MAC addresses via
-// the Hexpad) and '-' (CONSTANT-NAMES). Letters and digits always continue;
-// UNDERSCORE BACKSPACE DELETE are ZMK's defaults.
-&caps_word {
-    continue-list = <UNDERSCORE BACKSPACE DELETE COLON MINUS>;
-};
-
 / {
   behaviors {
     #include "macros.dtsi"
@@ -115,6 +108,30 @@
                 release-after-ms = <1000>;
                 display-name = "Hexpad";
         };
+    // Caps word (tap both Shift keys, also on the Hexpad), zmk-modules/smart-keys:
+    // like ZMK's caps word, plus compose letters (Ö Š ...) and the caps lock
+    // LED. Keeps going through ':' (MAC addresses via the Hexpad) and '-'
+    // (CONSTANT-NAMES); letters and digits always continue; UNDERSCORE
+    // BACKSPACE DELETE are ZMK's defaults.
+    caps_wd: smart_caps_word {
+                compatible = "zmk,behavior-smart-caps-word";
+                #binding-cells = <0>;
+                continue-list = <UNDERSCORE BACKSPACE DELETE COLON MINUS>;
+                display-name = "CapsWd";
+        };
+    // Hexpad Shift keys: with the other Shift held = caps word
+    hex_lshift: hex_lshift {
+                compatible = "zmk,behavior-mod-morph";
+                #binding-cells = <0>;
+                bindings = <&kp LSHFT>, <&caps_wd>;
+                mods = <(MOD_RSFT)>;
+        };
+    hex_rshift: hex_rshift {
+                compatible = "zmk,behavior-mod-morph";
+                #binding-cells = <0>;
+                bindings = <&kp RSHFT>, <&caps_wd>;
+                mods = <(MOD_LSFT)>;
+        };
     // Repeat key: replays whatever the last key typed (whole macros, unicode
     // entry, exact modifiers), skips Space. zmk-modules/smart-keys.
     repeat: smart_repeat {
@@ -198,7 +215,7 @@
         &macro_s_caron  &kp COMMA &trans &macro_pipe   &trans        &trans            &trans                                                   &trans &trans    &trans         &kp AMPERSAND &trans        &trans        &macro_z_caron
         &kp AT          &kp A     &kp B  &kp C         &kp D         &macro_underscore &trans                                                   &trans &kp GRAVE &unshifted_n2  &unshifted_n3 &unshifted_n4 &unshifted_n5 &macro_bslh
         &macro_ctrl_f11 &kp E     &kp F  &unshifted_n0 &unshifted_n1 &kp LBKT          &trans        &trans &trans         &trans &trans        &trans &kp RBKT  &unshifted_n6  &unshifted_n7 &unshifted_n8 &unshifted_n9 &kp PERCENT
-        &kp LSHFT       &trans    &kp I  &trans        &trans        &trans                                 &macro_unicode &trans                      &kp COLON &macro_o_tilde &macro_a_dqt  &macro_o_dqt  &macro_u_dqt  &kp RSHFT
+        &hex_lshift     &trans    &kp I  &trans        &trans        &trans                                 &macro_unicode &trans                      &kp COLON &macro_o_tilde &macro_a_dqt  &macro_o_dqt  &macro_u_dqt  &hex_rshift
         &trans          &trans    &trans &kp PLUS      &kp MINUS                              &trans &trans &trans         &trans &trans &trans                  &kp ASTRK      &kp HASH      &trans        &trans        &trans
       >;
     };
@@ -206,22 +223,22 @@
     layer_left_shift {
       display-name = "LShift";
       bindings = <
-        &trans     &trans &trans &trans           &trans      &trans &tog 1                                                    &mo 4            &trans &trans          &trans       &trans &unshifted_equal &trans
-        &trans     &trans &trans &trans           &trans      &trans &macro_question                                           &macro_hash      &trans &trans          &trans       &trans &trans           &trans
-        &trans     &trans &trans &trans           &trans      &trans &macro_caret           &trans &trans &trans &trans        &unshifted_grave &trans &trans          &trans       &trans &trans           &trans
-        &caps_word &trans &trans &trans           &trans      &trans                               &trans &trans                                &trans &trans          &trans       &trans &trans           &caps_word
-        &trans     &trans &trans &unshifted_grave &macro_hash                        &trans &trans &trans &trans &trans &trans                         &macro_question &macro_caret &trans &trans           &trans
+        &trans   &trans &trans &trans           &trans      &trans &tog 1                                                    &mo 4            &trans &trans          &trans       &trans &unshifted_equal &trans
+        &trans   &trans &trans &trans           &trans      &trans &macro_question                                           &macro_hash      &trans &trans          &trans       &trans &trans           &trans
+        &trans   &trans &trans &trans           &trans      &trans &macro_caret           &trans &trans &trans &trans        &unshifted_grave &trans &trans          &trans       &trans &trans           &trans
+        &caps_wd &trans &trans &trans           &trans      &trans                               &trans &trans                                &trans &trans          &trans       &trans &trans           &caps_wd
+        &trans   &trans &trans &unshifted_grave &macro_hash                        &trans &trans &trans &trans &trans &trans                         &macro_question &macro_caret &trans &trans           &trans
       >;
     };
 
     layer_right_shift {
       display-name = "RShift";
       bindings = <
-        &trans     &trans &trans &trans           &trans      &trans &tog 1                                                    &mo 4            &trans &trans          &trans       &trans &unshifted_equal &trans
-        &trans     &trans &trans &trans           &trans      &trans &macro_question                                           &macro_hash      &trans &trans          &trans       &trans &trans           &trans
-        &trans     &trans &trans &trans           &trans      &trans &macro_caret           &trans &trans &trans &trans        &unshifted_grave &trans &trans          &trans       &trans &trans           &trans
-        &caps_word &trans &trans &trans           &trans      &trans                               &trans &trans                                &trans &trans          &trans       &trans &trans           &caps_word
-        &trans     &trans &trans &unshifted_grave &macro_hash                        &trans &trans &trans &trans &trans &trans                         &macro_question &macro_caret &trans &trans           &trans
+        &trans   &trans &trans &trans           &trans      &trans &tog 1                                                    &mo 4            &trans &trans          &trans       &trans &unshifted_equal &trans
+        &trans   &trans &trans &trans           &trans      &trans &macro_question                                           &macro_hash      &trans &trans          &trans       &trans &trans           &trans
+        &trans   &trans &trans &trans           &trans      &trans &macro_caret           &trans &trans &trans &trans        &unshifted_grave &trans &trans          &trans       &trans &trans           &trans
+        &caps_wd &trans &trans &trans           &trans      &trans                               &trans &trans                                &trans &trans          &trans       &trans &trans           &caps_wd
+        &trans   &trans &trans &unshifted_grave &macro_hash                        &trans &trans &trans &trans &trans &trans                         &macro_question &macro_caret &trans &trans           &trans
       >;
     };
   };

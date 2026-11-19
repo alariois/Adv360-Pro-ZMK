@@ -15,7 +15,7 @@ keyboard.
 | `config/macros.dtsi`, `config/boards/` | Kinesis upstream, don't edit (keeps upstream merges clean) |
 | `config/adv360.conf`, `config/adv360_right.overlay` | Enable the USB bootloader reset; the right half gets its own CDC ACM port. Never add `config/adv360.overlay`: ZMK picks only the first matching overlay and it would shadow `adv360_right.overlay` |
 | `zmk-modules/usb-bootloader-reset` | Zephyr module: 1200 baud "touch" on a USB serial port reboots that half into the UF2 bootloader |
-| `zmk-modules/smart-keys` | Daily-firmware behaviors (central half only): `&repeat` smart repeat key, `&sl_hex` one-shot Hexpad layer (tap again = off, Enter on release after unicode entry), mod-morph unmask on next key. Its listeners run before ZMK's own (module objects link first) and it observes HID modifier state by `--wrap`ping `zmk_hid_masked_modifiers_set/clear` and `zmk_hid_implicit_modifiers_press` |
+| `zmk-modules/smart-keys` | Daily-firmware behaviors (central half only): `&repeat` smart repeat key (symbols replay with their recorded Shift, letters take the current Shift/caps word), `&sl_hex` one-shot Hexpad layer (tap again = off, Enter on release after unicode entry), `&caps_wd` caps word (compose letters Ö Š uppercase, lights the caps lock LED by `--wrap`ping `zmk_hid_indicators_get_current_profile`), mod-morph unmask on next key. Its listeners run before ZMK's own (module objects link first) and it observes HID modifier state by `--wrap`ping `zmk_hid_masked_modifiers_set/clear` and `zmk_hid_implicit_modifiers_press` |
 | `zmk-modules/key-monitor` | **Test-only** module (snippet `key-monitor`): USB serial port on the left half that streams key positions/layer changes and accepts injected presses. Protocol in its `Kconfig` |
 | `tools/adv360/` | Stdlib-only Python: `keymap.py` (keymap/layout parser + key labels), `device.py` (key-monitor connection), `fmt.py` (keymap formatter) |
 | `bin/` | `build.sh` (runs in Docker), `flash.sh`, `keymap-ui`, `e2e` |
@@ -80,8 +80,13 @@ Keymap conventions that keep fast typing correct:
 - Shift-proof keys (a key that ignores Shift) are mod-morphs generated as
   `&unshifted_<key>` by `macro_gen.js`, never "release Shift, tap, press
   Shift" macros (those race with the next key).
-- Repeat is `&repeat`, the Hexpad key `&sl_hex 5`; tests find them by label
-  ("Repeat", "Hexpad"/"sticky").
+- Repeat is `&repeat`, the Hexpad key `&sl_hex 5`, caps word `&caps_wd`
+  (never ZMK's `&caps_word`: no compose letters, no LED); tests find them by
+  label ("Repeat", "Hexpad"/"sticky", "CapsWd"). On the Hexpad the Shift
+  keys are mod-morphs `&hex_lshift`/`&hex_rshift` (other Shift held = caps
+  word).
+- Compose macros are `ScrollLock, accent, letter`; caps word and repeat
+  rely on that shape to find the letter.
 
 ## E2E tests
 
@@ -122,8 +127,10 @@ class TestThing(E2ETestCase):
   the keymap (the same labels `bin/keymap-ui` shows), so tests survive keys
   moving. `kb.binding(pos, layer)` gives the raw binding for sanity checks.
 - `kb.type("text")` types text the way a person would: each character's
-  key (plain, with Shift, or Hexpad + key) comes from the keymap labels
-  (`kb.char_map()`).
+  key (plain, with Shift, Hexpad + key, or Shift + Hexpad + key for Ö Š ...)
+  comes from the keymap labels (`kb.char_map()`).
+- `kb.indicators() & kb.CAPS_LOCK_LED`: LED state as the keyboard shows it
+  (key-monitor `I` command).
 - `kb.tap(*positions)`, `kb.press/release(pos)`, `with kb.hold(*positions)`.
   Every press waits for the keyboard's acknowledgement and until follow-up
   events (macro layer changes) have settled: no sleeps in tests.

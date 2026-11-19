@@ -11,8 +11,10 @@ config ZMK_KEY_MONITOR
 	    device -> host  "H key-monitor <version> inject=<0|1> keys=<n>"
 	                    "P <position> <1|0>"   key pressed / released
 	                    "L <layer mask hex> <highest layer>"
+	                    "I <hex>"              HID indicators (LEDs), bit 1 = caps lock
 	    host -> device  "?"                    resend H and L
 	                    "K <position> <1|0>"   inject a press / release
+	                    "I"                    report the HID indicators (LED state)
 
 config ZMK_KEY_MONITOR_INJECT
 	bool "Accept injected key presses from the host"

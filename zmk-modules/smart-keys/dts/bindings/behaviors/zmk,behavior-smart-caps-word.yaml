@@ -1,0 +1,15 @@
+description: |
+  Caps word (tap to toggle) that keeps going through this keymap's compose
+  macros (ScrollLock + accent + letter, the letter is shifted) and lights the
+  caps lock LED while on.
+
+compatible: "zmk,behavior-smart-caps-word"
+
+include: zero_param.yaml
+
+properties:
+  continue-list:
+    type: array
+    required: true
+  mods:
+    type: int
