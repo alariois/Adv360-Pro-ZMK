@@ -11,7 +11,8 @@
  *    takes Shift from when repeat is pressed (Shift held, caps word), not
  *    from when it was typed. Ö + repeat = Öö, Shift+repeat = ÖÖ.
  *  - Ctrl+Shift+U unicode entry is one recording, up to and including the
- *    Enter/Space that ends it.
+ *    Enter/Space that ends it. Inside the entry, repeat repeats the last
+ *    key (1f4<repeat>d = 1f44d), and that becomes part of the recording.
  *  - Modifier-only and layer keys don't replace the recording, and neither
  *    does Space (so "> " + repeat gives "> >").
  *  - A single-key recording is pressed while repeat is held and released
@@ -54,6 +55,11 @@ static bool new_group = true; /* the next recorded keycode starts a new recordin
 static bool unicode_session;
 static bool replaying; /* our own replayed keycodes aren't recorded */
 static int pending_item = -1; /* last recorded item, until the HID listener applied it */
+/* Inside a unicode entry: the last key press's keycodes are
+ * rec[group_start..rec_len); a key press starts a new group with its first
+ * keycode (so pressing repeat itself doesn't empty it). */
+static uint8_t group_start;
+static bool group_pending;
 
 bool smart_keys_unicode_active(void) { return unicode_session; }
 
@@ -93,6 +99,10 @@ static void record(const struct zmk_keycode_state_changed *ev) {
     };
 
     if (unicode_session) {
+        if (group_pending) {
+            group_start = rec_len;
+            group_pending = false;
+        }
         append(&it);
         if (ends_unicode(it.id)) {
             unicode_session = false;
@@ -108,6 +118,8 @@ static void record(const struct zmk_keycode_state_changed *ev) {
         rec_len = 0;
         append(&it);
         unicode_session = true;
+        group_start = 0;
+        group_pending = false;
         new_group = false;
         return;
     }
@@ -128,8 +140,12 @@ static void record(const struct zmk_keycode_state_changed *ev) {
 static int smart_repeat_listener(const zmk_event_t *eh) {
     const struct zmk_position_state_changed *pos = as_zmk_position_state_changed(eh);
     if (pos != NULL) {
-        if (pos->state && !unicode_session) {
-            new_group = true;
+        if (pos->state) {
+            if (unicode_session) {
+                group_pending = true;
+            } else {
+                new_group = true;
+            }
         }
         return ZMK_EV_EVENT_BUBBLE;
     }
@@ -138,7 +154,9 @@ static int smart_repeat_listener(const zmk_event_t *eh) {
     if (ev != NULL && ev->state) {
         pending_item = -1;
     }
-    if (ev != NULL && ev->state && !replaying && ev->usage_page == HID_USAGE_KEY &&
+    /* replayed keys are recorded only as part of a unicode entry */
+    if (ev != NULL && ev->state && (!replaying || unicode_session) &&
+        ev->usage_page == HID_USAGE_KEY &&
         !is_mod(ev->usage_page, ev->keycode)) {
         record(ev);
     }
@@ -225,12 +243,17 @@ static void play_step(struct k_work *work) {
 
 static int on_smart_repeat_pressed(struct zmk_behavior_binding *binding,
                                    struct zmk_behavior_binding_event event) {
-    if (rec_len == 0 || unicode_session || k_work_delayable_is_pending(&play_work)) {
+    if (k_work_delayable_is_pending(&play_work)) {
         return ZMK_BEHAVIOR_OPAQUE;
     }
+    /* Inside a unicode entry only the last key (its hex digit) repeats. */
+    uint8_t from = unicode_session ? group_start : 0;
+    if (rec_len <= from || (unicode_session && from == 0)) {
+        return ZMK_BEHAVIOR_OPAQUE; /* nothing typed yet (or only Ctrl+Shift+U) */
+    }
 
-    memcpy(play, rec, rec_len * sizeof(rec[0]));
-    play_len = rec_len;
+    play_len = rec_len - from;
+    memcpy(play, &rec[from], play_len * sizeof(rec[0]));
     play_letter = letter_item(play, play_len);
 
     if (play_len == 1) {

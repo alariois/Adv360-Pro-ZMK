@@ -69,6 +69,32 @@ class TestRepeatMacros(RepeatTestCase):
         self.kb.tap(self.repeat)
         self.assertTyped("🚀🚀")
 
+    def unicode_keys(self, keys):
+        """Hexpad held, Ctrl+Shift+U, then hex digits or "R" for repeat."""
+        kb = self.kb
+        with kb.hold(self.hexpad):
+            kb.tap(kb.key("Ctrl+Shift+U", layer="Hexpad"))
+            for ch in keys:
+                kb.tap(self.repeat if ch == "R" else kb.key(ch.upper(), layer="Hexpad"))
+
+    def test_repeat_inside_unicode_entry(self):
+        self.unicode_keys("1f4Rd")
+        self.assertTyped("👍")
+
+    def test_repeat_digit_and_letter_inside_unicode_entry(self):
+        self.unicode_keys("1f60R")  # 1f600, a repeated digit
+        self.unicode_keys("1f4aR")  # 1f4aa, a repeated letter
+        self.assertTyped("😀💪")
+
+    def test_unicode_entry_with_repeat_repeats_whole(self):
+        self.unicode_keys("1f4Rd")
+        self.kb.tap(self.repeat)
+        self.assertTyped("👍👍")
+
+    def test_repeat_right_after_ctrl_shift_u_does_nothing(self):
+        self.unicode_keys("R1f680")
+        self.assertTyped("🚀")
+
     def test_repeat_twice(self):
         self.kb.type("õ")
         self.kb.tap(self.repeat, self.repeat)
