@@ -18,6 +18,13 @@
  *  - A single-key recording is pressed while repeat is held and released
  *    with it (OS auto-repeat works); if that key is still held, ZMK's HID
  *    layer releases it first, so repeat works mid-roll.
+ *  - Split keyboards: the other half's key presses arrive over Bluetooth a
+ *    few ms to ~20 ms late, so a repeat key on this (central) half pressed
+ *    right after a key on the other half would repeat the key before that.
+ *    A repeat press on this half therefore waits SPLIT_WAIT_MS first: the
+ *    other half's presses arriving meanwhile go through (and are what gets
+ *    repeated), this half's own key events are held back and replayed after
+ *    the repeat, in order.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -135,18 +142,46 @@ static void record(const struct zmk_keycode_state_changed *ev) {
     append(&it);
 }
 
+/* ---- waiting for the other half (split) ---------------------------------- */
+
+#define SPLIT_WAIT (IS_ENABLED(CONFIG_ZMK_SPLIT) && CONFIG_ZMK_SMART_REPEAT_SPLIT_WAIT_MS > 0)
+
+#if SPLIT_WAIT
+static bool waiting; /* a repeat press on this half waits for the other half */
+/* this half's key events while waiting, released after the repeat */
+static struct zmk_position_state_changed_event held[16];
+static uint8_t held_len;
+
+static void wait_done(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(wait_work, wait_done);
+static void end_wait(void);
+#endif
+
+static void note_position(const struct zmk_position_state_changed *pos) {
+    if (pos->state) {
+        if (unicode_session) {
+            group_pending = true;
+        } else {
+            new_group = true;
+        }
+    }
+}
+
 /* Module listeners run before ZMK's own, so this sees each event before the
  * HID listener applies it, with the modifier state it will be sent with. */
 static int smart_repeat_listener(const zmk_event_t *eh) {
     const struct zmk_position_state_changed *pos = as_zmk_position_state_changed(eh);
     if (pos != NULL) {
-        if (pos->state) {
-            if (unicode_session) {
-                group_pending = true;
-            } else {
-                new_group = true;
+#if SPLIT_WAIT
+        if (waiting && pos->source == ZMK_POSITION_STATE_CHANGE_SOURCE_LOCAL) {
+            if (held_len < ARRAY_SIZE(held)) {
+                held[held_len++] = copy_raised_zmk_position_state_changed(pos);
+                return ZMK_EV_EVENT_CAPTURED;
             }
+            end_wait(); /* no room: stop waiting, then this event goes on */
         }
+#endif
+        note_position(pos);
         return ZMK_EV_EVENT_BUBBLE;
     }
 
@@ -241,15 +276,14 @@ static void play_step(struct k_work *work) {
     }
 }
 
-static int on_smart_repeat_pressed(struct zmk_behavior_binding *binding,
-                                   struct zmk_behavior_binding_event event) {
+static void start_repeat(void) {
     if (k_work_delayable_is_pending(&play_work)) {
-        return ZMK_BEHAVIOR_OPAQUE;
+        return;
     }
     /* Inside a unicode entry only the last key (its hex digit) repeats. */
     uint8_t from = unicode_session ? group_start : 0;
     if (rec_len <= from || (unicode_session && from == 0)) {
-        return ZMK_BEHAVIOR_OPAQUE; /* nothing typed yet (or only Ctrl+Shift+U) */
+        return; /* nothing typed yet (or only Ctrl+Shift+U) */
     }
 
     play_len = rec_len - from;
@@ -264,6 +298,44 @@ static int on_smart_repeat_pressed(struct zmk_behavior_binding *binding,
         play_release_next = false;
         play_step(NULL);
     }
+}
+
+#if SPLIT_WAIT
+/* Repeat, then let this half's held-back key events through in order. One
+ * of them can be another repeat press that starts a new wait: the rest
+ * stays held for that one. */
+static void end_wait(void) {
+    k_work_cancel_delayable(&wait_work);
+    waiting = false;
+    start_repeat();
+    uint8_t i = 0;
+    while (i < held_len && !waiting) {
+        struct zmk_position_state_changed_event ev = held[i++];
+        note_position(&ev.data);
+        ZMK_EVENT_RELEASE(ev);
+    }
+    memmove(held, &held[i], (held_len - i) * sizeof(held[0]));
+    held_len -= i;
+}
+
+static void wait_done(struct k_work *work) {
+    ARG_UNUSED(work);
+    if (waiting) {
+        end_wait();
+    }
+}
+#endif
+
+static int on_smart_repeat_pressed(struct zmk_behavior_binding *binding,
+                                   struct zmk_behavior_binding_event event) {
+#if SPLIT_WAIT
+    if (event.source == ZMK_POSITION_STATE_CHANGE_SOURCE_LOCAL) {
+        waiting = true;
+        k_work_schedule(&wait_work, K_MSEC(CONFIG_ZMK_SMART_REPEAT_SPLIT_WAIT_MS));
+        return ZMK_BEHAVIOR_OPAQUE;
+    }
+#endif
+    start_repeat();
     return ZMK_BEHAVIOR_OPAQUE;
 }
 

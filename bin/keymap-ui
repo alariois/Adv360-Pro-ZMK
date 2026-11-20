@@ -61,7 +61,7 @@ class Hub:
         elif kind == "H":
             s["hello"] = line
         elif kind == "P":
-            pos, state = (int(x) for x in rest.split())
+            pos, state = (int(x) for x in rest.split()[:2])  # (version 2 adds a time)
             pressed = set(s["pressed"])
             (pressed.add if state else pressed.discard)(pos)
             s["pressed"] = sorted(pressed)

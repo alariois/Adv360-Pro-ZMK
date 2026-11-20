@@ -2,9 +2,12 @@
 
 Needs the TEST firmware (bin/flash.sh --test) and an X11 desktop.
 
-  * Keyboard  - injects key presses through the key-monitor port. Keys are
-                looked up by their label in config/adv360.keymap, so tests
-                survive keys being moved around.
+  * Keyboard  - injects key presses through the key-monitor ports. Keys of
+                the right half are pressed on the right half (its own
+                key-monitor port), so they reach the left half over the
+                split link with the real Bluetooth latency. Keys are looked
+                up by their label in config/adv360.keymap, so tests survive
+                keys being moved around.
   * Capture   - a GTK text window (same input method as your apps, so
                 compose and Ctrl+Shift+U unicode entry work) that is forced to
                 the front and must hold the keyboard focus before anything is
@@ -37,7 +40,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 
 from adv360 import keymap  # noqa: E402
-from adv360.device import KeyMonitor  # noqa: E402
+from adv360.device import RIGHT_PRODUCT, KeyMonitor  # noqa: E402
 
 
 class E2EError(AssertionError):
@@ -52,7 +55,14 @@ class Keyboard:
 
     def __init__(self, monitor, km, quiet=0.03, before_input=None):
         self.monitor = monitor
+        self.right = None  # the right half's key monitor, if it has one
+        # (pos, pressed, uptime us) as each half saw its keys; the left
+        # half sees the right half's keys when they arrive over the link
+        self.left_times, self.right_times = [], []
         self.layers = km["layers"]
+        layout = km["layout"]
+        middle = (min(k["x"] for k in layout) + max(k["x"] + k["w"] for k in layout)) / 2
+        self.right_keys = {i for i, k in enumerate(layout) if k["x"] + k["w"] / 2 > middle}
         # After each press/release, wait until the keyboard has been quiet
         # this long: macros (e.g. the Shift keys: Shift + layer) finish
         # asynchronously and report their layer changes a few ms later.
@@ -140,9 +150,23 @@ class Keyboard:
 
     def on_message(self, line):
         self.log.append((time.monotonic(), line))
+        line = self._device_time(line, self.left_times)
         if line.startswith("L "):
             self.layer_mask = int(line.split()[1], 16)
         self.events.put(line)
+
+    @staticmethod
+    def _device_time(line, times):
+        """'P <pos> <state> <us>' -> 'P <pos> <state>', noting the time."""
+        parts = line.split()
+        if parts[:1] == ["P"] and len(parts) == 4:
+            times.append((int(parts[1]), parts[2] == "1", int(parts[3])))
+            return " ".join(parts[:3])
+        return line
+
+    def on_right_message(self, line):
+        self.log.append((time.monotonic(), "R " + line))
+        self._device_time(line, self.right_times)
 
     def _wait_for(self, line, timeout=2.0, prefix=False):
         deadline = time.monotonic() + timeout
@@ -181,18 +205,60 @@ class Keyboard:
 
     # -- pressing keys ---------------------------------------------------------
 
+    def half(self, pos):
+        """Key monitor that presses `pos` like a person would: the right
+        half's own one for its keys (over the split link), else the left."""
+        if self.right is not None and pos in self.right_keys:
+            return self.right
+        return self.monitor
+
     def press(self, pos):
         self.before_input()
-        self.monitor.press(pos, True)
+        self.half(pos).press(pos, True)
         self._wait_for(f"P {pos} 1")
         self.down.add(pos)
         self._settle()
 
     def release(self, pos):
-        self.monitor.press(pos, False)
+        self.half(pos).press(pos, False)
         self._wait_for(f"P {pos} 0")
         self.down.discard(pos)
         self._settle()
+
+    def play(self, steps, timeout=2.0):
+        """Timed key script, like a person typing: steps are
+        (seconds after the previous step, position, pressed). Nothing waits
+        for the keyboard in between, so presses can overtake each other on
+        the way to the left half as in real typing; afterwards every step
+        must have been acknowledged. Returns [(pos, pressed, sent, acked)]
+        with host times, e.g. to measure the split latency."""
+        done = []
+        at = time.monotonic()
+        self.before_input()
+        for delay, pos, pressed in steps:
+            at += delay
+            while (now := time.monotonic()) < at:
+                time.sleep(min(0.0005, at - now))
+            self.half(pos).press(pos, pressed)
+            done.append([pos, bool(pressed), time.monotonic(), None])
+            (self.down.add if pressed else self.down.discard)(pos)
+        deadline = time.monotonic() + timeout
+        while any(d[3] is None for d in done) and time.monotonic() < deadline:
+            try:
+                got = self.events.get(timeout=max(0.0, deadline - time.monotonic()))
+            except queue.Empty:
+                break
+            if got.startswith("E ") or got == "disconnected":
+                raise E2EError(f"keyboard said {got!r} during play()")
+            for d in done:
+                if d[3] is None and got == f"P {d[0]} {int(d[1])}":
+                    d[3] = time.monotonic()
+                    break
+        missing = [f"P {d[0]} {int(d[1])}" for d in done if d[3] is None]
+        if missing:
+            raise E2EError(f"keyboard didn't acknowledge {missing} within {timeout}s")
+        self._settle()
+        return [tuple(d) for d in done]
 
     def tap(self, *positions, hold=0.02):
         for pos in positions:
@@ -228,7 +294,7 @@ class Keyboard:
             try:
                 self.release(pos)
             except E2EError:
-                self.monitor.press(pos, False)
+                self.half(pos).press(pos, False)
         self.down.clear()
 
     def wait_idle(self, timeout=3.0):
@@ -408,6 +474,15 @@ class Session:
         if "inject=1" not in (self.monitor.hello or ""):
             raise E2EError(f"firmware doesn't allow injection: {self.monitor.hello}")
         self.monitor.start()
+        # Optional: right-half keys are then pressed on the right half.
+        right = KeyMonitor(self.kb.on_right_message, product=RIGHT_PRODUCT)
+        if right.connect() and "inject=1" in (right.hello or ""):
+            self.right = self.kb.right = right.start()
+        else:
+            right.close()
+            self.right = None
+            print("e2e: the right half has no key monitor (old test firmware?), "
+                  "its keys are injected on the left half", file=sys.stderr)
 
     @classmethod
     def close(cls):
@@ -417,6 +492,8 @@ class Session:
                 s.kb.release_all()
             finally:
                 s.monitor.stop()
+                if s.right is not None:
+                    s.right.stop()
                 s.capture.close()
             cls._instance = None
 
@@ -430,6 +507,8 @@ class E2ETestCase(unittest.TestCase):
         self.kb.wait_idle()
         self.capture.clear()
         self.kb.log.clear()
+        self.kb.left_times.clear()
+        self.kb.right_times.clear()
         self.capture.status(f"Running {self.id().split('.', 2)[-1]}")
         self.capture.ensure_focus()
 

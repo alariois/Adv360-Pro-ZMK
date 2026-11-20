@@ -18,17 +18,25 @@
 #include <zephyr/logging/log.h>
 
 #include <zmk/event_manager.h>
-#include <zmk/events/layer_state_changed.h>
 #include <zmk/events/position_state_changed.h>
+#include <zmk/matrix.h>
+
+/* The peripheral (right half) has no keymap, layers or HID: there the
+ * monitor only reports and injects its own key positions, which then
+ * travel to the central over the split link like real key presses. */
+#define CENTRAL (!IS_ENABLED(CONFIG_ZMK_SPLIT) || IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL))
+
+#if CENTRAL
+#include <zmk/events/layer_state_changed.h>
 #include <zmk/keymap.h>
 #if IS_ENABLED(CONFIG_ZMK_HID_INDICATORS)
 #include <zmk/hid_indicators.h>
 #endif
-#include <zmk/matrix.h>
+#endif
 
 LOG_MODULE_REGISTER(key_monitor, CONFIG_ZMK_LOG_LEVEL);
 
-#define KEY_MONITOR_VERSION 1
+#define KEY_MONITOR_VERSION 2
 
 BUILD_ASSERT(DT_HAS_CHOSEN(zmk_key_monitor_uart),
              "key-monitor needs a chosen zmk,key-monitor-uart (use the key-monitor snippet)");
@@ -57,16 +65,19 @@ static void send_line(const char *line) {
 }
 
 static void send_layers(void) {
+#if CENTRAL
     char buf[40];
     snprintf(buf, sizeof(buf), "L %x %u\n", (unsigned int)zmk_keymap_layer_state(),
              (unsigned int)zmk_keymap_highest_layer_active());
     send_line(buf);
+#endif
 }
 
 static void send_hello(void) {
-    char buf[64];
-    snprintf(buf, sizeof(buf), "H key-monitor %d inject=%d keys=%d\n", KEY_MONITOR_VERSION,
-             IS_ENABLED(CONFIG_ZMK_KEY_MONITOR_INJECT), ZMK_KEYMAP_LEN);
+    char buf[80];
+    snprintf(buf, sizeof(buf), "H key-monitor %d inject=%d keys=%d role=%s\n", KEY_MONITOR_VERSION,
+             IS_ENABLED(CONFIG_ZMK_KEY_MONITOR_INJECT), ZMK_KEYMAP_LEN,
+             CENTRAL ? "central" : "peripheral");
     send_line(buf);
     send_layers();
 }
@@ -74,18 +85,25 @@ static void send_hello(void) {
 static int key_monitor_listener(const zmk_event_t *eh) {
     const struct zmk_position_state_changed *pos = as_zmk_position_state_changed(eh);
     if (pos) {
-        char buf[24];
-        snprintf(buf, sizeof(buf), "P %u %u\n", (unsigned int)pos->position, pos->state ? 1 : 0);
+        char buf[40];
+        /* uptime in us: when this half saw the key (split latency) */
+        snprintf(buf, sizeof(buf), "P %u %u %u\n", (unsigned int)pos->position, pos->state ? 1 : 0,
+                 (unsigned int)k_ticks_to_us_floor64(k_uptime_ticks()));
         send_line(buf);
-    } else if (as_zmk_layer_state_changed(eh)) {
+    }
+#if CENTRAL
+    else if (as_zmk_layer_state_changed(eh)) {
         send_layers();
     }
+#endif
     return ZMK_EV_EVENT_BUBBLE;
 }
 
 ZMK_LISTENER(key_monitor, key_monitor_listener);
 ZMK_SUBSCRIPTION(key_monitor, zmk_position_state_changed);
+#if CENTRAL
 ZMK_SUBSCRIPTION(key_monitor, zmk_layer_state_changed);
+#endif
 
 /* ---- host -> device ---------------------------------------------------- */
 
@@ -172,7 +190,7 @@ static void process_commands(struct k_work *work) {
             send_hello();
         } else if (cmd.type == 'I') {
             char buf[16];
-#if IS_ENABLED(CONFIG_ZMK_HID_INDICATORS)
+#if CENTRAL && IS_ENABLED(CONFIG_ZMK_HID_INDICATORS)
             /* What the LEDs show (caps lock includes smart-keys caps word) */
             snprintf(buf, sizeof(buf), "I %x\n", zmk_hid_indicators_get_current_profile());
 #else

@@ -1,15 +1,19 @@
 config ZMK_KEY_MONITOR
 	bool "Stream key positions and layer state over a USB serial port"
 	depends on USB_CDC_ACM && UART_INTERRUPT_DRIVEN && UART_LINE_CTRL
-	depends on !ZMK_SPLIT || ZMK_SPLIT_ROLE_CENTRAL
 	help
 	  TEST BUILDS ONLY. Every key press is sent to whoever opens the
 	  serial port (the chosen zmk,key-monitor-uart), i.e. a keylogger for
 	  local programs. Enable it with the key-monitor snippet.
 
+	  On a split peripheral (the right half) it reports and injects only
+	  that half's key positions (no L/I): injected presses reach the
+	  central over the split link, with its real latency.
+
 	  Protocol, one ASCII line per message:
-	    device -> host  "H key-monitor <version> inject=<0|1> keys=<n>"
-	                    "P <position> <1|0>"   key pressed / released
+	    device -> host  "H key-monitor <version> inject=<0|1> keys=<n> role=<central|peripheral>"
+	                    "P <position> <1|0> <us>"  key pressed / released,
+	                                           <us>: this half's uptime
 	                    "L <layer mask hex> <highest layer>"
 	                    "I <hex>"              HID indicators (LEDs), bit 1 = caps lock
 	    host -> device  "?"                    resend H and L

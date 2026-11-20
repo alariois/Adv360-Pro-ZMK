@@ -1,7 +1,8 @@
 """Connection to the key-monitor serial port of a TEST firmware build.
 
 Protocol (see zmk-modules/key-monitor/Kconfig):
-  device -> host  "H key-monitor <ver> inject=<0|1> keys=<n>", "P <pos> <1|0>",
+  device -> host  "H key-monitor <ver> inject=<0|1> keys=<n> role=<central|peripheral>",
+                  "P <pos> <1|0> <uptime us>",
                   "L <layer mask hex> <highest layer>", "I <indicators hex>", "E <error>"
   host -> device  "?", "K <pos> <1|0>", "I"
 """
@@ -14,12 +15,13 @@ import time
 from pathlib import Path
 
 VID = "29ea"
-LEFT_PRODUCT = "Adv360 Pro"  # the central half; the right one is "Adv360 Pro rt"
+LEFT_PRODUCT = "Adv360 Pro"  # the central half
+RIGHT_PRODUCT = "Adv360 Pro rt"  # the peripheral; test builds have a key monitor there too
 
 
-def candidate_ports():
-    """ttyACM devices of the left half, highest USB interface first (the
-    key-monitor port comes after the Studio one)."""
+def candidate_ports(product=LEFT_PRODUCT):
+    """ttyACM devices of one half, highest USB interface first (the
+    key-monitor port comes after the Studio / bootloader-reset one)."""
     ports = []
     for tty in Path("/sys/class/tty").glob("ttyACM*"):
         iface = (tty / "device").resolve()
@@ -27,7 +29,7 @@ def candidate_ports():
         try:
             if (usbdev / "idVendor").read_text().strip() != VID:
                 continue
-            if (usbdev / "product").read_text().strip() != LEFT_PRODUCT:
+            if (usbdev / "product").read_text().strip() != product:
                 continue
             num = int((iface / "bInterfaceNumber").read_text(), 16)
         except OSError:
@@ -52,9 +54,10 @@ class KeyMonitor:
     """Thread-safe connection. `on_message(str)` gets every line from the
     device plus synthetic "connected <port>" / "disconnected" lines."""
 
-    def __init__(self, on_message=None, port=None):
+    def __init__(self, on_message=None, port=None, product=LEFT_PRODUCT):
         self.on_message = on_message or (lambda line: None)
         self.port = port
+        self.product = product
         self.fd = None
         self.hello = None
         self._lock = threading.Lock()
@@ -81,7 +84,7 @@ class KeyMonitor:
         return None, None
 
     def connect(self):
-        for path in [self.port] if self.port else candidate_ports():
+        for path in [self.port] if self.port else candidate_ports(self.product):
             try:
                 fd, hello = self._probe(path)
             except OSError:

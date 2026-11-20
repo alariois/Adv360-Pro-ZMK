@@ -9,10 +9,13 @@ EXTRA_MODULES="${EXTRA_MODULES:-${PWD}/extra-modules/usb-bootloader-reset;${PWD}
 
 # TEST=1 builds the test flavor: the left half (central) gets the key-monitor
 # serial port that streams and injects key presses. Never use it day to day.
+# The right half gets one too (injected presses then go over the split link).
 LEFT_SNIPPETS="-S studio-rpc-usb-uart"
+RIGHT_SNIPPETS=""
 FLAVOR=""
 if [ "${TEST:-}" = 1 ]; then
     LEFT_SNIPPETS="${LEFT_SNIPPETS} -S key-monitor"
+    RIGHT_SNIPPETS="-S key-monitor"
     FLAVOR="-test"
 fi
 
@@ -26,7 +29,7 @@ cp build/left/zephyr/zmk.uf2 "./firmware/${TIMESTAMP}-${COMMIT}-left${FLAVOR}-cl
 # Build right side if selected
 if [ "${BUILD_RIGHT}" = true ]; then
     # West Build (right)
-    west build -s zmk/app -p -d build/right -b adv360_right -- -DZMK_CONFIG="${PWD}/config" -DZMK_EXTRA_MODULES="${EXTRA_MODULES}"
+    west build -s zmk/app -p -d build/right -b adv360_right ${RIGHT_SNIPPETS} -- -DZMK_CONFIG="${PWD}/config" -DZMK_EXTRA_MODULES="${EXTRA_MODULES}"
     # Adv360 Right Kconfig file
     grep -vE '(^#|^$)' build/right/zephyr/.config
     # Rename zmk.uf2
