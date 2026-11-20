@@ -15,7 +15,8 @@ keyboard.
 | `config/macros.dtsi`, `config/boards/` | Kinesis upstream, don't edit (keeps upstream merges clean) |
 | `config/adv360.conf`, `config/adv360_right.overlay` | Enable the USB bootloader reset; the right half gets its own CDC ACM port. Never add `config/adv360.overlay`: ZMK picks only the first matching overlay and it would shadow `adv360_right.overlay` |
 | `zmk-modules/usb-bootloader-reset` | Zephyr module: 1200 baud "touch" on a USB serial port reboots that half into the UF2 bootloader |
-| `zmk-modules/smart-keys` | Daily-firmware behaviors (central half only): `&repeat` smart repeat key (also inside a Ctrl+Shift+U unicode entry: repeats the last hex digit; symbols replay with their recorded Shift, letters take the current Shift/caps word; a Repeat on the left half waits `ZMK_SMART_REPEAT_SPLIT_WAIT_MS` (25) for right-half presses still in flight over Bluetooth, holding back left-half events meanwhile), `&sl_hex` one-shot Hexpad layer (tap again = off, Enter on release after unicode entry), `&caps_wd` caps word (compose letters Ö Š uppercase, lights the caps lock LED by `--wrap`ping `zmk_hid_indicators_get_current_profile`), mod-morph unmask on next key. Its listeners run before ZMK's own (module objects link first) and it observes HID modifier state by `--wrap`ping `zmk_hid_masked_modifiers_set/clear` and `zmk_hid_implicit_modifiers_press` |
+| `zmk-modules/smart-keys` | Daily-firmware behaviors (central half only): `&repeat` smart repeat key (also inside a Ctrl+Shift+U unicode entry: repeats the last hex digit; symbols replay with their recorded Shift, letters take the current Shift/caps word), `&sl_hex` one-shot Hexpad layer (tap again = off, Enter on release after unicode entry), `&caps_wd` caps word (compose letters Ö Š uppercase, lights the caps lock LED by `--wrap`ping `zmk_hid_indicators_get_current_profile`), mod-morph unmask on next key. Its listeners run before ZMK's own (module objects link first) and it observes HID modifier state by `--wrap`ping `zmk_hid_masked_modifiers_set/clear` and `zmk_hid_implicit_modifiers_press` |
+| `zmk-modules/split-timing` | Both halves: the right half notifies every key event with its own timestamp (own GATT characteristic next to ZMK's split service); the left half learns the clock offset and processes all key events, from both halves, in **press order**, `ZMK_SPLIT_TIMING_DELAY_MS` (20) after each press. Fixes cross-half races (right key, then a left key a few ms later) caused by the 2-20 ms Bluetooth latency. Must be **first** in `EXTRA_MODULES` (its listener captures key events before all others) |
 | `zmk-modules/key-monitor` | **Test-only** module (snippet `key-monitor`): USB serial port that streams key positions (with device uptime)/layer changes and accepts injected presses. On both halves: on the right one it only injects/reports that half's keys, which then reach the left half over the real split link. Protocol in its `Kconfig` |
 | `tools/adv360/` | Stdlib-only Python: `keymap.py` (keymap/layout parser + key labels), `device.py` (key-monitor connection), `fmt.py` (keymap formatter) |
 | `bin/` | `build.sh` (runs in Docker), `flash.sh`, `keymap-ui`, `e2e` |
@@ -139,7 +140,8 @@ class TestThing(E2ETestCase):
   like real typing. `kb.play([(delay, pos, pressed), ...])` plays a timed
   script without waiting in between, for cross-half races (see
   `test_split_timing.py`); `kb.left_times`/`kb.right_times` hold each
-  half's device timestamps.
+  half's device timestamps. The left half's key monitor reports keys when
+  split-timing releases them for processing (~20 ms after the press).
 - `with kb.fast(gap=0.03):` types without waiting for macros/layers to
   settle, to reproduce fast-typing races (rolls: press the next key before
   releasing the previous one, see `test_fast_typing.py`).

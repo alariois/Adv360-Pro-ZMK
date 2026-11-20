@@ -1,0 +1,30 @@
+config ZMK_SPLIT_TIMING
+	bool "Process key presses of both halves in the order they were pressed"
+	default y
+	depends on ZMK_SPLIT && ZMK_SPLIT_BLE
+	help
+	  The peripheral's key presses reach the central over Bluetooth a few
+	  ms to ~20 ms late, so a central key pressed just after a peripheral
+	  key overtook it. With this option the peripheral also sends the time
+	  of every key event (its own GATT characteristic, next to ZMK's split
+	  service). The central converts it to its own clock and processes all
+	  key events, from both halves, in press order, each
+	  ZMK_SPLIT_TIMING_DELAY_MS after it was pressed.
+
+	  Both halves need it: a central without a timestamped peripheral
+	  falls back to arrival order (plus the delay).
+
+config ZMK_SPLIT_TIMING_DELAY_MS
+	int "Delay from a key press to processing it (the longest split latency to wait for)"
+	default 20
+	depends on ZMK_SPLIT_TIMING
+
+config ZMK_SPLIT_TIMING_LINK_MIN_US
+	int "Fastest split link latency (us), subtracted from the peripheral's press times"
+	default 2000
+	depends on ZMK_SPLIT_TIMING
+	help
+	  The clock offset is learned from the fastest peripheral events, so
+	  without this the peripheral's keys would be placed this much too
+	  late. Measured on the Advantage 360 Pro: ~2.5 ms
+	  (tests/e2e/test_split_timing.py).

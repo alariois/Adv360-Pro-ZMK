@@ -25,16 +25,6 @@ config ZMK_SMART_REPEAT_STEP_MS
 	int "Delay between replayed key presses/releases of a multi-key recording"
 	default 5
 
-config ZMK_SMART_REPEAT_SPLIT_WAIT_MS
-	int "How long a repeat key on the central half waits for the other half"
-	default 25
-	help
-	  Split keyboards: the peripheral's key presses reach the central a
-	  few ms to ~20 ms late (Bluetooth). A repeat key on the central half
-	  waits this long before repeating, so a key pressed just before it on
-	  the other half is the one repeated. The central's own key events in
-	  the meantime are held back and replayed after it. 0 disables.
-
 endif
 
 config ZMK_BEHAVIOR_ONESHOT_LAYER

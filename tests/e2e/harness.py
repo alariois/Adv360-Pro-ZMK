@@ -233,8 +233,8 @@ class Keyboard:
         must have been acknowledged. Returns [(pos, pressed, sent, acked)]
         with host times, e.g. to measure the split latency."""
         done = []
+        self.before_input()  # (slow: the clock starts after it)
         at = time.monotonic()
-        self.before_input()
         for delay, pos, pressed in steps:
             at += delay
             while (now := time.monotonic()) < at:
