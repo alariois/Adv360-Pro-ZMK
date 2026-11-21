@@ -175,15 +175,29 @@ class Labeler:
             return self.behavior_label(beh, params, depth)
         return name[1:], " ".join(params)
 
+    @property
+    def zero_param(self):
+        """'&name' of behaviors that take no parameters (macros etc.)."""
+        return {f"&{n}" for n, b in self.behaviors.items()
+                if b.compatible in ("zmk,behavior-macro", "zmk,behavior-mod-morph")}
+
     def behavior_label(self, beh, params, depth):
         flat = [b for g in beh.bindings for b in g]
         if beh.compatible == "zmk,behavior-mod-morph" and len(flat) >= 2:
-            normal, morphed = self.label(flat[0], depth + 1)[0], self.label(flat[1], depth + 1)[0]
+            (normal, nsub), (morphed, msub) = (self.label(flat[0], depth + 1),
+                                               self.label(flat[1], depth + 1))
+            if normal == morphed and nsub and nsub == msub:
+                return normal, nsub  # same key either way (e.g. sticky or plain Shift)
             return normal, "no shift" if normal == morphed else morphed
         if beh.compatible == "zmk,behavior-oneshot-layer" and params:
             return self.layer_name(params[0]), "sticky"
+        if beh.compatible == "zmk,behavior-sticky-shift" and flat:
+            return self.label(flat[0], depth + 1)  # e.g. Shift / LShift
         if beh.compatible == "zmk,behavior-sticky-key" and flat and params:
-            return self.label(f"{flat[0]} {params[0]}", depth + 1)[0], "sticky"
+            # a 0-parameter binding (e.g. a macro) ignores the sticky key's one
+            inner = flat[0] if flat[0] in self.zero_param else f"{flat[0]} {params[0]}"
+            main, sub = self.label(inner, depth + 1)
+            return main, sub or "sticky"
         if beh.compatible == "zmk,behavior-hold-tap" and len(params) >= 2:
             return key_label(params[1]), key_label(params[0])
         if beh.compatible == "zmk,behavior-macro":

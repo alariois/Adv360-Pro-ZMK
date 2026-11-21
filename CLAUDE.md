@@ -3,7 +3,9 @@
 Personal ZMK config for the Kinesis Advantage 360 Pro, based on Kinesis'
 `V3.0` branch (`upstream`), with a Dvorak-based programmer layout, local
 builds, one-command flashing and end-to-end tests that drive the real
-keyboard.
+keyboard. **No Bluetooth** in the daily firmware: the halves talk over a
+custom encrypted radio link (`zmk-modules/split-radio`, ~1 ms), the left
+half is on USB, the right half runs on its battery.
 
 ## Layout of the repo
 
@@ -14,32 +16,40 @@ keyboard.
 | `macro_gen.js` | Generates per-key macros, compose macros (š ž õ ä ö ü °), shift-proof digits (`&unshifted_n0..9`) |
 | `config/macros.dtsi`, `config/boards/` | Kinesis upstream, don't edit (keeps upstream merges clean) |
 | `config/adv360.conf`, `config/adv360_right.overlay` | Enable the USB bootloader reset; the right half gets its own CDC ACM port. Never add `config/adv360.overlay`: ZMK picks only the first matching overlay and it would shadow `adv360_right.overlay` |
-| `zmk-modules/usb-bootloader-reset` | Zephyr module: 1200 baud "touch" on a USB serial port reboots that half into the UF2 bootloader |
-| `zmk-modules/smart-keys` | Daily-firmware behaviors (central half only): `&repeat` smart repeat key (also inside a Ctrl+Shift+U unicode entry: repeats the last hex digit; symbols replay with their recorded Shift, letters take the current Shift/caps word), `&sl_hex` one-shot Hexpad layer (tap again = off, Enter on release after unicode entry), `&caps_wd` caps word (compose letters Ö Š uppercase, lights the caps lock LED by `--wrap`ping `zmk_hid_indicators_get_current_profile`), mod-morph unmask on next key. Its listeners run before ZMK's own (module objects link first) and it observes HID modifier state by `--wrap`ping `zmk_hid_masked_modifiers_set/clear` and `zmk_hid_implicit_modifiers_press` |
-| `zmk-modules/split-timing` | Both halves: the right half notifies every key event with its own timestamp (own GATT characteristic next to ZMK's split service); the left half learns the clock offset and processes all key events, from both halves, in **press order**, `ZMK_SPLIT_TIMING_DELAY_MS` (20) after each press. Fixes cross-half races (right key, then a left key a few ms later) caused by the 2-20 ms Bluetooth latency. Must be **first** in `EXTRA_MODULES` (its listener captures key events before all others) |
+| `zmk-modules/usb-bootloader-reset` | Zephyr module: 1200 baud "touch" on a USB serial port reboots that half into the UF2 bootloader. Also the hardware watchdog (`CONFIG_ZMK_WATCHDOG`): a hung half resets itself within 4 s (reset reason in the key monitor's hello, `reset=2`), with breadcrumbs (`zmk_crumb()`, key-monitor `C`) |
+| `zmk-modules/smart-keys` | Daily-firmware behaviors (central half only): `&lshift`/`&rshift` sticky Shift (`zmk,behavior-sticky-shift`: tapped alone = Shift + LShift/RShift layer for the next key that types something or 1 s; held or with another key pressed meanwhile = plain; with Ctrl/Alt/Super held = plain; tapped twice = caps word via the Shift layer), `&repeat` smart repeat key (also inside a Ctrl+Shift+U unicode entry: repeats the last hex digit; symbols replay with their recorded Shift, letters take the current Shift/caps word), `&sl_hex` one-shot Hexpad layer (tap again = off, Enter on release after unicode entry), `&caps_wd` caps word (compose letters Ö Š uppercase, lights the caps lock LED by `--wrap`ping `zmk_hid_indicators_get_current_profile`), mod-morph unmask on next key. Its listeners run before ZMK's own (module objects link first) and it observes HID modifier state by `--wrap`ping `zmk_hid_masked_modifiers_set/clear` and `zmk_hid_implicit_modifiers_press` |
+| `zmk-modules/split-timing` | Left half: processes the key events of both halves in **press order**, `ZMK_SPLIT_TIMING_DELAY_MS` after each press (1 ms with split-radio, which gives exact press times; 20 ms over Bluetooth, where the right half notifies timestamps on its own GATT characteristic and the left half estimates the clock offset). Must be **first** in `EXTRA_MODULES` (its listener captures key events before all others). Bluetooth-only experiments: heartbeat/watermark, link tuning (`src/link_tuning.c`), `experiments/` |
+| `zmk-modules/split-radio` | **The split link** (default build, `RADIO=1`): both halves drive the nRF52840 radio directly (Nordic 2 Mbit, one channel), AES-128-CCM with the pre-shared key from `.split-radio-key` (made by the Makefile, gitignored, both halves need the same key: flash both after it changes), per-boot handshake, replay protection. Right half: sends key events at once with their age, polls every 100 ms for the LED/backlight state, crystal on only while active, backs off when the left half is gone. Left half: always receiving, releases right-half keys if the right half restarts or goes silent. `patches/rgb_underglow.py` makes Kinesis' LED code (`rgb_underglow.c`, `backlight.c`) take its central path without Bluetooth. CCM checked against OpenSSL: `tests/ccm_test.c` |
 | `zmk-modules/key-monitor` | **Test-only** module (snippet `key-monitor`): USB serial port that streams key positions (with device uptime)/layer changes and accepts injected presses. On both halves: on the right one it only injects/reports that half's keys, which then reach the left half over the real split link. Protocol in its `Kconfig` |
 | `tools/adv360/` | Stdlib-only Python: `keymap.py` (keymap/layout parser + key labels), `device.py` (key-monitor connection), `fmt.py` (keymap formatter) |
-| `bin/` | `build.sh` (runs in Docker), `flash.sh`, `keymap-ui`, `e2e` |
+| `bin/` | `build.sh` (runs in Docker), `flash.sh`, `keymap-ui`, `e2e`, `split-bench` (split latency benchmark), `split-soak` (minutes of cross-half presses, counts hangs) |
+| `docs/split-latency-research.md` | Measured latency of every split option (BLE tuning, short intervals, raw radio), what worked and what didn't |
 | `tests/e2e/` | End-to-end tests against the real keyboard |
 
 ## Build and flash
 
 ```sh
 make                       # daily firmware -> firmware/*-{left,right}-clique.uf2 (Docker)
-make test                  # test firmware (adds key-monitor to the left half) -> *-test-clique.uf2
+make test                  # test firmware (key monitor on both halves) -> *-test-clique.uf2
+make RADIO=0               # Bluetooth split instead of split-radio -> *-ble*-clique.uf2 (what CI builds)
 bin/flash.sh               # build + flash both halves, no key presses needed (~10 s + build)
 bin/flash.sh --no-build    # flash the newest build
 bin/flash.sh --test        # build + flash the TEST firmware
+bin/flash.sh --ble         # the Bluetooth flavor
 bin/flash.sh --left|--right, --left-uf2 FILE, --right-uf2 FILE, --reset (settings-reset first)
 ```
+
+- Both halves must run firmware built with the same `.split-radio-key`
+  (`bin/flash.sh` flashes both). The right half must be on USB for flashing
+  and testing; daily it runs on its battery.
 
 - Flashing reboots each half into its bootloader by setting 1200 baud on its
   USB serial port, writes the `.uf2` to the `ADV360PRO` drive (matched to the
   half by USB serial number) and waits for it to come back.
 - If a half has no serial port (old/other firmware) the script asks for
   `Mod` + bootloader key (Hotkey 1 left, Hotkey 3 right; the right one goes
-  through the left half over BLE, so both halves need matching firmware), or
-  double-tap the reset button with a paperclip.
+  through the left half over the split link, so both halves need matching
+  firmware), or double-tap the reset button with a paperclip.
 - **The test firmware is a keylogger + remote keyboard for every local
   program.** Flash it only for testing; `bin/flash.sh` puts the daily build
   back. `bin/e2e --flash` re-flashes the test build.
@@ -78,6 +88,10 @@ HID and fails to link. Add new modules to `EXTRA_MODULES` in
 `bin/build.sh` and in `.github/workflows/build.yml`.
 
 Keymap conventions that keep fast typing correct:
+- The Base Shift keys are `&lshift`/`&rshift` (sticky Shift around
+  `&macro_lshift_mo_6`/`&macro_rshift_mo_7`); tests find them as
+  "Shift"/"LShift" and "Shift"/"RShift". Tests that tap Shift alone get a
+  sticky Shift for the next key.
 - Shift-proof keys (a key that ignores Shift) are mod-morphs generated as
   `&unshifted_<key>` by `macro_gen.js`, never "release Shift, tap, press
   Shift" macros (those race with the next key).
@@ -153,6 +167,18 @@ class TestThing(E2ETestCase):
 - Expected text assumes the host uses the US keyboard layout; compose
   macros (š ž õ ...) depend on the host's compose key setup.
 
+## Latency experiments
+
+- `make test EXTRA_CMAKE="-DCONFIG_X=y ..."` builds with extra Kconfig,
+  `ZEPHYR_PATCH=/app/extra-modules/...sh` runs a patch script on the Zephyr
+  tree inside the build container first
+  (`zmk-modules/split-timing/experiments/`).
+- `bin/split-bench` (test firmware): raw split latency (split-timing off)
+  or press-to-processing delays (`S` key-monitor command), plus `B`
+  (Bluetooth link parameters) and `R` (split-radio counters).
+- An experiment that hangs the left half also kills its USB serial port:
+  the 1200-baud reset can't work, double-tap the reset button.
+
 ## Live keymap viewer
 
 `bin/keymap-ui` serves http://127.0.0.1:8360/ and opens it: layout from the
@@ -161,6 +187,17 @@ press them (test firmware), text box with the result. It only shows the
 keymap **file**, not what is flashed or changed in ZMK Studio.
 
 ## Gotchas
+
+- ZMK handles keys on the system work queue: its stack is 4 KB
+  (`CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE` in `config/adv360.conf`). With the
+  default 1 KB nested event handling (sticky Shift around a macro,
+  split-timing releasing captured events) overflowed it and hung the left
+  half.
+- No Bluetooth in the daily firmware (`CONFIG_BT=n`): Kinesis code that
+  assumes it gets the split-radio stand-ins (`zmk_split_bt_update_led/_bl`,
+  `zmk_ble_active_profile_*`, `zmk_split_bt_peripheral_is_*`). The left LED
+  that showed the Bluetooth profile shows the link: steady = right half
+  connected.
 
 - Docker mounts `zmk-modules/` at `/app/extra-modules`; never mount anything
   at `/app/modules` (that hides the Zephyr modules west installed there).

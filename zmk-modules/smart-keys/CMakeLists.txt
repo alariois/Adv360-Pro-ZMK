@@ -14,6 +14,7 @@ if(CONFIG_ZMK_BEHAVIOR_SMART_REPEAT)
 endif()
 
 target_sources_ifdef(CONFIG_ZMK_BEHAVIOR_ONESHOT_LAYER app PRIVATE src/oneshot_layer.c)
+target_sources_ifdef(CONFIG_ZMK_BEHAVIOR_STICKY_SHIFT app PRIVATE src/sticky_shift.c)
 
 if(CONFIG_ZMK_BEHAVIOR_SMART_CAPS_WORD)
   target_sources(app PRIVATE src/smart_caps_word.c)

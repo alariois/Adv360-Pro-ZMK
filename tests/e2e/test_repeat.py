@@ -175,10 +175,11 @@ class TestRepeatModifiers(RepeatTestCase):
     def test_modifier_and_layer_taps_dont_replace_last_key(self):
         kb = self.kb
         kb.type("q")
-        kb.tap(self.lshift)
         kb.tap(kb.key("Ctrl", sub="QWERTY"))
         kb.tap(self.repeat)
-        self.assertTyped("qq")
+        kb.tap(self.lshift)  # sticky Shift: the repeated letter is shifted
+        kb.tap(self.repeat)
+        self.assertTyped("qqQ")
 
 
 class TestRepeatSpace(RepeatTestCase):

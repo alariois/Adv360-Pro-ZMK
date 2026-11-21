@@ -1,0 +1,18 @@
+description: |
+  Sticky Shift: wraps a Shift binding (e.g. a Shift + layer macro).
+  Held: the binding is held; pressing any other key meanwhile makes it a
+  plain hold. Tapped alone: stays held until the next key that types
+  something has been sent completely (or release-after-ms), tap again = off.
+  With Ctrl, Alt or Super held when pressed: always a plain hold.
+
+compatible: "zmk,behavior-sticky-shift"
+
+include: zero_param.yaml
+
+properties:
+  bindings:
+    type: phandle-array
+    required: true
+  release-after-ms:
+    type: int
+    default: 1000
