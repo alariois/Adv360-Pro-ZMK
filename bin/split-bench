@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""Measure the split link: how much later the left half sees a right-half
+key than a left-half key pressed at the same moment (TEST firmware on both
+halves, X11 for the capture window; run like bin/e2e).
+
+Each sample presses right Shift (on the right half, over its own USB port)
+and Esc (left half) together, then reads the left half's key-monitor
+timestamps (one clock):
+  * firmware without split-timing: the left half reports keys on arrival,
+    so the difference is the split link latency (+ any USB asymmetry)
+  * with split-timing: keys are reported when released in press order, so
+    the difference is the remaining ordering error (ideally ~0)
+
+Usage: bin/split-bench [-n SAMPLES] [--label TEXT] [--json FILE]
+"""
+
+import argparse
+import json
+import os
+import random
+import statistics
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+
+def ensure_gtk_python():
+    try:
+        import gi  # noqa: F401
+    except ImportError:
+        system = "/usr/bin/python3"
+        if os.path.realpath(system) != os.path.realpath(sys.executable):
+            os.execv(system, [system, __file__, *sys.argv[1:]])
+
+
+def links(kb, monitor, timeout=1.0):
+    """'B' lines of one half's key monitor."""
+    got = []
+    before = len(kb.log)
+    monitor.send("B")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        new = [line for _, line in kb.log[before:]]
+        if any(line.endswith("B end") for line in new):
+            return [l.split(" ", 1)[1] if l.startswith("R ") else l
+                    for l in new if "B " in l and not l.endswith("B end")]
+        time.sleep(0.02)
+    return got
+
+
+def stats_line(kb, timeout=1.0):
+    """split-timing's delay statistics (and reset them), '' without it."""
+    before = len(kb.log)
+    kb.monitor.send("S")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for _, line in kb.log[before:]:
+            if line.startswith("S"):
+                return line[2:]
+        time.sleep(0.02)
+    return ""
+
+
+def pct(values, p):
+    return values[min(len(values) - 1, int(len(values) * p))]
+
+
+def main():
+    ensure_gtk_python()
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("-n", type=int, default=200)
+    ap.add_argument("--label", default="")
+    ap.add_argument("--json")
+    args = ap.parse_args()
+
+    from tests.e2e.harness import Session
+    s = Session.get()
+    kb = s.kb
+    if kb.right is None:
+        sys.exit("the right half has no key monitor: flash the test firmware")
+    try:
+        right_key, left_key = kb.key("Shift", sub="RShift"), kb.key("Esc")
+        info = {"left": links(kb, kb.monitor), "right": links(kb, kb.right)}
+        stats_line(kb)  # reset
+        diffs = []
+        for _ in range(args.n):
+            kb.left_times.clear()
+            kb.play([(0, right_key, 1), (0, left_key, 1), (0.03, right_key, 0), (0, left_key, 0)])
+            t = {(p, st): us for p, st, us in kb.left_times}
+            diffs.append((t[(right_key, True)] - t[(left_key, True)]) / 1000)
+            time.sleep(random.uniform(0.01, 0.06))
+        diffs.sort()
+        stats = {"n": len(diffs), "min": diffs[0], "p50": statistics.median(diffs),
+                 "p90": pct(diffs, 0.9), "p99": pct(diffs, 0.99), "max": diffs[-1],
+                 "mean": statistics.fmean(diffs)}
+        print(f"{args.label or 'split-bench'}: right key seen after left key, ms "
+              + " ".join(f"{k} {v:.2f}" for k, v in stats.items() if k != "n")
+              + f" (n={len(diffs)})")
+        delays = stats_line(kb)
+        if delays:
+            print(f"  press->processing (us): {delays}")
+            stats["delays"] = delays
+        if delays:
+            # left-half keys alone: only heartbeats can release them early
+            for _ in range(min(args.n, 100)):
+                kb.play([(0, left_key, 1), (0.03, left_key, 0)])
+                time.sleep(random.uniform(0.01, 0.06))
+            stats["left_only_delays"] = stats_line(kb)
+            print(f"  left keys alone, press->processing (us): {stats['left_only_delays']}")
+        for half, lines in info.items():
+            for line in lines:
+                print(f"  {half} link: {line}")
+        if args.json:
+            with open(args.json, "a") as f:
+                f.write(json.dumps({"label": args.label, **stats, "links": info,
+                                    "samples": diffs}) + "\n")
+    finally:
+        Session.close()
+
+
+if __name__ == "__main__":
+    main()

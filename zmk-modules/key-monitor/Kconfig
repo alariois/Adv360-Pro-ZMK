@@ -16,7 +16,13 @@ config ZMK_KEY_MONITOR
 	                                           <us>: this half's uptime
 	                    "L <layer mask hex> <highest layer>"
 	                    "I <hex>"              HID indicators (LEDs), bit 1 = caps lock
+	                    "B <role> <interval> <latency> <timeout> <tx phy> <rx phy>"
+	                    per Bluetooth link (1.25 ms / 10 ms units), then "B end"
 	    host -> device  "?"                    resend H and L
+	                    "B"                    report the Bluetooth links
+	                    "X"                    reboot this half
+	                    "S"                    split-timing press->processing delays
+	                                           (then reset): "S local n= mean= max= ..."
 	                    "K <position> <1|0>"   inject a press / release
 	                    "I"                    report the HID indicators (LED state)
 

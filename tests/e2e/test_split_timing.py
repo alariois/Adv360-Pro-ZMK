@@ -11,7 +11,7 @@ order, a fixed delay after each press.
 These tests press right-half keys on the right half (its own key-monitor
 port), so they travel over the real split link."""
 
-import statistics
+import time
 
 from tests.e2e.harness import E2ETestCase
 
@@ -126,21 +126,27 @@ class TestLettersAcrossHalves(SplitTestCase):
 
 class TestSplitLatency(SplitTestCase):
 
-    def test_right_keys_processed_after_a_constant_delay(self):
-        """The left half's key monitor reports keys when they are processed:
-        for right-half keys that must now be a constant time after the press
-        (device clocks, so only the spread is known), however long the
-        Bluetooth link took."""
+    def test_right_keys_processed_in_time(self):
+        """Right-half keys reach processing within the press-order cap
+        (CONFIG_ZMK_SPLIT_TIMING_DELAY_MS, 20 ms) plus a little: the
+        timestamp of every one of them arrived and was used (keys without
+        a timestamp would wait the cap after their arrival instead)."""
         kb = self.kb
         shift = kb.key("Shift", sub="RShift")  # types nothing
+        kb.monitor.send("S")  # reset split-timing's statistics
+        time.sleep(0.2)
         for _ in range(60):
             kb.play([(0, shift, 1), (0.015, shift, 0)])
-        left = [t for p, _, t in kb.left_times if p == shift]
-        right = [t for p, _, t in kb.right_times if p == shift]
-        self.assertEqual(len(left), len(right))
-        diffs = [(a - b) / 1000 for a, b in zip(left, right)]
-        spread = sorted(d - min(diffs) for d in diffs)
-        stats = (f"median {statistics.median(spread):.1f} ms, "
-                 f"p95 {spread[int(len(spread) * 0.95)]:.1f} ms, max {spread[-1]:.1f} ms")
-        print(f"\n  right-half press -> processed, above the fastest: {stats}")
-        self.assertLess(spread[int(len(spread) * 0.95)], 3, stats)
+        before = len(kb.log)
+        kb.monitor.send("S")
+        deadline = time.monotonic() + 1
+        line = ""
+        while not line and time.monotonic() < deadline:
+            line = next((l for _, l in kb.log[before:] if l.startswith("S ")), "")
+            time.sleep(0.02)
+        self.assertTrue(line, "no statistics from split-timing")
+        remote = dict(kv.split("=") for kv in line.split("remote", 1)[1].split()
+                      if "=" in kv)
+        print(f"\n  split-timing: {line[2:]}")
+        self.assertEqual(int(remote["n"]), 120, line)
+        self.assertLess(int(remote["max"]), 22000, line)

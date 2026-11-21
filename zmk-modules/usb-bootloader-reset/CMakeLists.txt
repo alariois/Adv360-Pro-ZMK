@@ -1,4 +1,5 @@
-if(CONFIG_ZMK_USB_BOOTLOADER_RESET)
+if(CONFIG_ZMK_USB_BOOTLOADER_RESET OR CONFIG_ZMK_WATCHDOG)
   zephyr_library()
-  zephyr_library_sources(src/usb_bootloader_reset.c)
+  zephyr_library_sources_ifdef(CONFIG_ZMK_USB_BOOTLOADER_RESET src/usb_bootloader_reset.c)
+  zephyr_library_sources_ifdef(CONFIG_ZMK_WATCHDOG src/watchdog.c)
 endif()

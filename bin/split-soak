@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""Soak test (TEST firmware): keep pressing keys on both halves for a while
+and count hangs. A hung half is reset by the watchdog (CONFIG_ZMK_WATCHDOG):
+the key monitor then reconnects and its hello says reset=2.
+
+Usage: bin/split-soak [MINUTES]   (X11 capture window, run like bin/e2e)
+"""
+
+import os
+import random
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+try:
+    import gi  # noqa: F401
+except ImportError:
+    os.execv("/usr/bin/python3", ["/usr/bin/python3", __file__, *sys.argv[1:]])
+
+from tests.e2e.harness import E2EError, Session  # noqa: E402
+
+minutes = float(sys.argv[1]) if len(sys.argv) > 1 else 5
+s = Session.get()
+kb = s.kb
+right_key, left_key = kb.key("Shift", sub="RShift"), kb.key("Esc")
+end = time.monotonic() + minutes * 60
+rounds = hangs = 0
+start = time.monotonic()
+try:
+    while time.monotonic() < end:
+        try:
+            gap = random.choice((0, 0.003, 0.01, 0.03))
+            first, second = random.sample((right_key, left_key), 2)
+            kb.play([(0, first, 1), (gap, second, 1), (0.03, first, 0), (0.005, second, 0)])
+            rounds += 1
+            time.sleep(random.uniform(0.005, 0.08))
+        except E2EError as e:
+            hangs += 1
+            t = time.monotonic() - start
+            print(f"{t:6.1f}s after {rounds} rounds: {e}", flush=True)
+            kb.release_all() if False else None
+            deadline = time.monotonic() + 20
+            hello = None
+            while time.monotonic() < deadline:
+                time.sleep(0.5)
+                hellos = [l for _, l in kb.log if l.startswith("H key-monitor")]
+                if hellos and "reset=" in hellos[-1] and kb.monitor.connected:
+                    hello = hellos[-1]
+            print(f"        left now: {hello or 'NOT BACK'}; "
+                  f"right: {s.right.hello if s.right else '-'}", flush=True)
+            kb.down.clear()
+            kb.log.clear()
+            if hello is None:
+                break
+finally:
+    print(f"{rounds} rounds, {hangs} hangs in {(time.monotonic() - start) / 60:.1f} min")
+    Session.close()

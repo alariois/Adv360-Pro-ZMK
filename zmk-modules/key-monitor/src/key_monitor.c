@@ -16,9 +16,13 @@
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/reboot.h>
 
 #include <zmk/event_manager.h>
 #include <zmk/events/position_state_changed.h>
+#if IS_ENABLED(CONFIG_BT)
+#include <zephyr/bluetooth/conn.h>
+#endif
 #include <zmk/matrix.h>
 
 /* The peripheral (right half) has no keymap, layers or HID: there the
@@ -73,11 +77,15 @@ static void send_layers(void) {
 #endif
 }
 
+/* the watchdog module keeps the reset reason (nRF RESETREAS, 2 = watchdog) */
+__weak uint32_t zmk_reset_reason(void) { return 0; }
+__weak int zmk_prev_crumbs(uint32_t *out, int max) { return 0; }
+
 static void send_hello(void) {
-    char buf[80];
-    snprintf(buf, sizeof(buf), "H key-monitor %d inject=%d keys=%d role=%s\n", KEY_MONITOR_VERSION,
-             IS_ENABLED(CONFIG_ZMK_KEY_MONITOR_INJECT), ZMK_KEYMAP_LEN,
-             CENTRAL ? "central" : "peripheral");
+    char buf[96];
+    snprintf(buf, sizeof(buf), "H key-monitor %d inject=%d keys=%d role=%s reset=%x\n",
+             KEY_MONITOR_VERSION, IS_ENABLED(CONFIG_ZMK_KEY_MONITOR_INJECT), ZMK_KEYMAP_LEN,
+             CENTRAL ? "central" : "peripheral", (unsigned int)zmk_reset_reason());
     send_line(buf);
     send_layers();
 }
@@ -108,10 +116,27 @@ ZMK_SUBSCRIPTION(key_monitor, zmk_layer_state_changed);
 /* ---- host -> device ---------------------------------------------------- */
 
 struct command {
-    char type; /* 'K' inject, '?' hello, 'I' indicators */
+    char type; /* 'K' inject, '?' hello, 'I' indicators, 'B' Bluetooth links */
     uint8_t state;
     uint16_t position;
 };
+
+static void send_links(void);
+
+/* split-radio counters, when that module is built in */
+__weak int split_radio_stats_text(char *buf, size_t len) {
+    ARG_UNUSED(len);
+    buf[0] = '\0';
+    return 0;
+}
+
+/* split-timing statistics, when that module is built in (central) */
+__weak int split_timing_stats(char *buf, size_t len, bool reset) {
+    ARG_UNUSED(len);
+    ARG_UNUSED(reset);
+    buf[0] = '\0';
+    return 0;
+}
 
 K_MSGQ_DEFINE(command_queue, sizeof(struct command), 32, 4);
 
@@ -124,6 +149,11 @@ static void handle_line(char *line) {
     switch (line[0]) {
     case '?':
     case 'I':
+    case 'B':
+    case 'S':
+    case 'R':
+    case 'X':
+    case 'C':
         break;
     case 'K': {
         char *end;
@@ -197,6 +227,37 @@ static void process_commands(struct k_work *work) {
             snprintf(buf, sizeof(buf), "I 0\n");
 #endif
             send_line(buf);
+        } else if (cmd.type == 'C') {
+            uint32_t c[32];
+            int n = zmk_prev_crumbs(c, ARRAY_SIZE(c));
+            char buf[24];
+            send_line("C");
+            for (int i = 0; i < n; i++) {
+                snprintf(buf, sizeof(buf), " %u@%u", (unsigned)(c[i] >> 24),
+                         (unsigned)(c[i] & 0xffffff));
+                send_line(buf);
+            }
+            send_line("\n");
+        } else if (cmd.type == 'X') {
+            sys_reboot(SYS_REBOOT_COLD);
+        } else if (cmd.type == 'B') {
+            send_links();
+        } else if (cmd.type == 'R') {
+            static char rbuf[240];
+            rbuf[0] = 'R';
+            rbuf[1] = ' ';
+            int n = split_radio_stats_text(rbuf + 2, sizeof(rbuf) - 4);
+            rbuf[2 + n] = '\n';
+            rbuf[3 + n] = '\0';
+            send_line(rbuf);
+        } else if (cmd.type == 'S') {
+            static char buf[200];
+            buf[0] = 'S';
+            buf[1] = ' ';
+            int n = split_timing_stats(buf + 2, sizeof(buf) - 4, true);
+            buf[2 + n] = '\n';
+            buf[3 + n] = '\0';
+            send_line(buf);
         } else if (cmd.type == 'K') {
 #if IS_ENABLED(CONFIG_ZMK_KEY_MONITOR_INJECT)
             raise_zmk_position_state_changed((struct zmk_position_state_changed){
@@ -210,6 +271,30 @@ static void process_commands(struct k_work *work) {
 #endif
         }
     }
+}
+
+#if IS_ENABLED(CONFIG_BT)
+static void send_conn_info(struct bt_conn *conn, void *data) {
+    struct bt_conn_info info;
+    char buf[80];
+    ARG_UNUSED(data);
+    if (bt_conn_get_info(conn, &info) != 0 || info.type != BT_CONN_TYPE_LE) {
+        return;
+    }
+    /* interval in 1.25 ms units, timeout in 10 ms units */
+    snprintf(buf, sizeof(buf), "B %s %u %u %u %u %u\n",
+             info.role == BT_CONN_ROLE_CENTRAL ? "central" : "peripheral", info.le.interval,
+             info.le.latency, info.le.timeout, info.le.phy ? info.le.phy->tx_phy : 0,
+             info.le.phy ? info.le.phy->rx_phy : 0);
+    send_line(buf);
+}
+#endif
+
+static void send_links(void) {
+#if IS_ENABLED(CONFIG_BT)
+    bt_conn_foreach(BT_CONN_TYPE_LE, send_conn_info, NULL);
+#endif
+    send_line("B end\n");
 }
 
 /* Notice a host opening the port (DTR raised) and greet it. */

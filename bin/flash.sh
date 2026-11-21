@@ -17,6 +17,8 @@
 #   --test            build/flash the TEST flavor: the left half gets the
 #                     key-monitor port that streams and injects key presses.
 #                     Flash without --test to go back to daily firmware.
+#   --ble             the Bluetooth split flavor (default: the halves talk over
+#                     the raw radio, zmk-modules/split-radio, left half on USB)
 #   --left | --right  flash only one half
 #   --reset           flash settings-reset.uf2 first (needs a manual
 #                     bootloader key press afterwards, the reset firmware has
@@ -35,25 +37,30 @@ CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/adv360-flash/serials"
 build=true
 sides=(left right)
 reset=false
-flavor=""
+test=""
+ble=""
 timeout=30
 declare -A FW=()
+uf2_sides=()
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --no-build) build=false ;;
-        --test) flavor="-test" ;;
+        --test) test="-test" ;;
+        --ble) ble="-ble" ;;
         --left) sides=(left) ;;
         --right) sides=(right) ;;
         --reset) reset=true ;;
-        --left-uf2) FW[left]="$(realpath "$2")"; build=false; sides=(left); shift ;;
-        --right-uf2) FW[right]="$(realpath "$2")"; build=false; sides=(right); shift ;;
+        --left-uf2) FW[left]="$(realpath "$2")"; build=false; uf2_sides+=(left); shift ;;
+        --right-uf2) FW[right]="$(realpath "$2")"; build=false; uf2_sides+=(right); shift ;;
         --timeout) timeout="$2"; shift ;;
         -h|--help) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
         *) echo "Unknown option: $1" >&2; exit 2 ;;
     esac
     shift
 done
+flavor="$ble$test"
+[ ${#uf2_sides[@]} -gt 0 ] && sides=("${uf2_sides[@]}")
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
@@ -203,7 +210,7 @@ wait_for_boot() {
 
 if $build; then
     log "Building firmware"
-    if [ -n "$flavor" ]; then make -C "$ROOT" test; else make -C "$ROOT"; fi
+    make -C "$ROOT" ${test:+TEST=1} RADIO=$([ -n "$ble" ] && echo 0 || echo 1)
 fi
 
 [ ${#FW[@]} -eq 2 ] && sides=(left right)

@@ -1,7 +1,7 @@
 config ZMK_SPLIT_TIMING
 	bool "Process key presses of both halves in the order they were pressed"
 	default y
-	depends on ZMK_SPLIT && ZMK_SPLIT_BLE
+	depends on ZMK_SPLIT
 	help
 	  The peripheral's key presses reach the central over Bluetooth a few
 	  ms to ~20 ms late, so a central key pressed just after a peripheral
@@ -12,12 +12,35 @@ config ZMK_SPLIT_TIMING
 	  ZMK_SPLIT_TIMING_DELAY_MS after it was pressed.
 
 	  Both halves need it: a central without a timestamped peripheral
-	  falls back to arrival order (plus the delay).
+	  falls back to arrival order (plus the delay). Without Bluetooth the
+	  split transport (zmk-modules/split-radio) provides the press times.
 
 config ZMK_SPLIT_TIMING_DELAY_MS
 	int "Delay from a key press to processing it (the longest split latency to wait for)"
+	default 1 if ZMK_SPLIT_RADIO
 	default 20
 	depends on ZMK_SPLIT_TIMING
+
+config ZMK_SPLIT_TIMING_HEARTBEAT_US
+	int "Peripheral: send a heartbeat timestamp this often (us, 0 = off)"
+	default 0
+	depends on ZMK_SPLIT_TIMING && ZMK_SPLIT_BLE
+	help
+	  "Nothing pressed here before T": lets the central release its own
+	  keys as soon as the link has caught up instead of after the full
+	  delay. One small notification per period (use the link interval).
+
+config ZMK_SPLIT_TIMING_WATERMARK
+	bool "Central: release keys early once the peripheral's messages are newer"
+	depends on ZMK_SPLIT_TIMING
+	help
+	  Bluetooth only, together with ZMK_SPLIT_TIMING_HEARTBEAT_US: tested
+	  that way (docs/split-latency-research.md).
+
+config ZMK_SPLIT_TIMING_WATERMARK_MARGIN_US
+	int "Central: how much newer than a key the peripheral's message must be (us)"
+	default 1000
+	depends on ZMK_SPLIT_TIMING_WATERMARK
 
 config ZMK_SPLIT_TIMING_LINK_MIN_US
 	int "Fastest split link latency (us), subtracted from the peripheral's press times"
@@ -28,3 +51,27 @@ config ZMK_SPLIT_TIMING_LINK_MIN_US
 	  without this the peripheral's keys would be placed this much too
 	  late. Measured on the Advantage 360 Pro: ~2.5 ms
 	  (tests/e2e/test_split_timing.py).
+
+# ---- split link tuning (central half), for experiments -----------------------
+
+config ZMK_SPLIT_LINK_2M_PHY
+	bool "Switch the split link to the 2M PHY"
+	depends on ZMK_SPLIT_ROLE_CENTRAL && ZMK_SPLIT_BLE
+
+config ZMK_SPLIT_LINK_NO_ADV_ON_USB
+	bool "Don't advertise to Bluetooth hosts while typing over USB"
+	depends on ZMK_SPLIT_ROLE_CENTRAL && ZMK_SPLIT_BLE && ZMK_USB
+	help
+	  Host advertising competes with the split link for the radio: without
+	  it the split latency tail drops from ~17 ms to one connection
+	  interval. While the selected output is USB the central doesn't
+	  advertise (checked every 250 ms); switching the output to Bluetooth
+	  (or unplugging) starts advertising again, a bonded host reconnects
+	  within about a second.
+
+config ZMK_SPLIT_LINK_NO_ADVERTISING
+	bool "EXPERIMENT: keep the central from advertising to hosts (USB only)"
+	depends on ZMK_SPLIT_ROLE_CENTRAL && ZMK_SPLIT_BLE
+	help
+	  Stops host advertising every 200 ms (it competes with the split link
+	  for the radio). Bluetooth hosts can't connect.

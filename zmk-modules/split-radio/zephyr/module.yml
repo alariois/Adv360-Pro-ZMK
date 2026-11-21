@@ -1,0 +1,4 @@
+name: split-radio
+build:
+  cmake: .
+  kconfig: Kconfig

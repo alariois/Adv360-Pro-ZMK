@@ -20,3 +20,19 @@ config ZMK_USB_BOOTLOADER_RESET_DELAY_MS
 	default 100
 
 endif
+
+config ZMK_WATCHDOG
+	bool "Reset the half if its firmware hangs (hardware watchdog)"
+	default y
+	depends on WATCHDOG
+	help
+	  The nRF watchdog resets the chip unless the system work queue (where
+	  ZMK handles keys) feeds it: a hung half restarts within
+	  ZMK_WATCHDOG_TIMEOUT_MS and its USB serial port comes back, so the
+	  1200 baud bootloader reset keeps working without the reset button.
+	  The reset reason is kept for the key monitor ("reset=" in its hello).
+
+config ZMK_WATCHDOG_TIMEOUT_MS
+	int "Watchdog timeout"
+	default 4000
+	depends on ZMK_WATCHDOG

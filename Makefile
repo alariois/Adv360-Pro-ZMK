@@ -12,6 +12,12 @@ endif
 # Only ask for a TTY when there is one (lets scripts/CI call make)
 DOCKER_TTY := $(shell [ -t 0 ] && echo -it)
 
+# RADIO=1 (default): the halves talk over the raw radio (zmk-modules/split-radio)
+# with this pre-shared key, made once, never committed (.gitignore). Both
+# halves must be built with the same key. RADIO=0: Bluetooth split (*-ble*).
+RADIO ?= 1
+SPLIT_RADIO_KEY := $(shell [ -s .split-radio-key ] || head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n' > .split-radio-key; cat .split-radio-key)
+
 .PHONY: all left test clean_firmware clean_image clean
 
 all:
@@ -25,6 +31,9 @@ all:
 		-e COMMIT=$(COMMIT) \
 		-e HOST_UID=$(shell id -u) -e HOST_GID=$(shell id -g) \
 		-e TEST=$(TEST) \
+		-e EXTRA_CMAKE='$(EXTRA_CMAKE)' \
+		-e ZEPHYR_PATCH='$(ZEPHYR_PATCH)' \
+		-e RADIO=$(RADIO) -e SPLIT_RADIO_KEY=$(SPLIT_RADIO_KEY) \
 		-e BUILD_RIGHT=true \
 		zmk
 	git checkout config/version.dtsi
@@ -40,6 +49,9 @@ left:
 		-e COMMIT=$(COMMIT) \
 		-e HOST_UID=$(shell id -u) -e HOST_GID=$(shell id -g) \
 		-e TEST=$(TEST) \
+		-e EXTRA_CMAKE='$(EXTRA_CMAKE)' \
+		-e ZEPHYR_PATCH='$(ZEPHYR_PATCH)' \
+		-e RADIO=$(RADIO) -e SPLIT_RADIO_KEY=$(SPLIT_RADIO_KEY) \
 		-e BUILD_RIGHT=false \
 		zmk
 	git checkout config/version.dtsi

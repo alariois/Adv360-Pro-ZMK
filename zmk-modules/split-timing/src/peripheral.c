@@ -43,6 +43,8 @@ static void notify_events(struct k_work *work) {
 
 static K_WORK_DEFINE(notify_work, notify_events);
 
+static uint32_t last_queued_us; /* last timestamp queued (key or heartbeat) */
+
 static int split_timing_listener(const zmk_event_t *eh) {
     const struct zmk_position_state_changed *pos = as_zmk_position_state_changed(eh);
     if (pos != NULL && pos->source == ZMK_POSITION_STATE_CHANGE_SOURCE_LOCAL) {
@@ -52,6 +54,7 @@ static int split_timing_listener(const zmk_event_t *eh) {
             .uptime_us = split_timing_now_us(),
         };
         if (k_msgq_put(&event_msgq, &ev, K_NO_WAIT) == 0) {
+            last_queued_us = ev.uptime_us;
             k_work_submit_to_queue(&notify_q, &notify_work);
         }
     }
@@ -61,9 +64,45 @@ static int split_timing_listener(const zmk_event_t *eh) {
 ZMK_LISTENER(split_timing, split_timing_listener);
 ZMK_SUBSCRIPTION(split_timing, zmk_position_state_changed);
 
+#if CONFIG_ZMK_SPLIT_TIMING_HEARTBEAT_US > 0
+/* "Nothing pressed here before now": lets the central release its own keys
+ * without waiting the full delay. */
+static void heartbeat(struct k_timer *t) {
+    /* Random period (+-1/3): a fixed one locks to the connection interval
+     * (same 32 kHz clock), every heartbeat then sees the same latency and
+     * the central's clock offset (smallest latency seen) is off by ms. */
+    static uint32_t x = 2463534242u;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    uint32_t third = CONFIG_ZMK_SPLIT_TIMING_HEARTBEAT_US / 3;
+    k_timer_start(t, K_USEC(CONFIG_ZMK_SPLIT_TIMING_HEARTBEAT_US - third + x % (2 * third)),
+                  K_NO_WAIT);
+
+    struct split_timing_event ev = {
+        .position = SPLIT_TIMING_HEARTBEAT,
+        .uptime_us = split_timing_now_us(),
+    };
+    /* any timestamp is a watermark: skip when one went out recently or
+     * the link is still busy sending (never crowd out key events) */
+    if (ev.uptime_us - last_queued_us < CONFIG_ZMK_SPLIT_TIMING_HEARTBEAT_US / 2 ||
+        k_msgq_num_used_get(&event_msgq) > 0) {
+        return;
+    }
+    if (k_msgq_put(&event_msgq, &ev, K_NO_WAIT) == 0) {
+        last_queued_us = ev.uptime_us;
+        k_work_submit_to_queue(&notify_q, &notify_work);
+    }
+}
+K_TIMER_DEFINE(heartbeat_timer, heartbeat, NULL);
+#endif
+
 static int split_timing_init(void) {
     k_work_queue_start(&notify_q, notify_stack, K_THREAD_STACK_SIZEOF(notify_stack),
                        K_PRIO_PREEMPT(5), NULL);
+#if CONFIG_ZMK_SPLIT_TIMING_HEARTBEAT_US > 0
+    k_timer_start(&heartbeat_timer, K_USEC(CONFIG_ZMK_SPLIT_TIMING_HEARTBEAT_US), K_NO_WAIT);
+#endif
     return 0;
 }
 
