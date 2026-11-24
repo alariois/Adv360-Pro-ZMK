@@ -37,7 +37,7 @@ class SplitTestCase(E2ETestCase):
         super().setUp()
         kb = self.kb
         if kb.right is None:
-            self.skipTest("the right half has no key monitor (flash the test firmware)")
+            self.skipTest("no right-half key monitor (bin/e2e --left-only, or not the test firmware)")
         repeats = [i for i, k in enumerate(kb.layer("Base")["keys"]) if k["label"] == "Repeat"]
         self.left_repeat = next(p for p in repeats if p not in kb.right_keys)
         self.right_repeat = next(p for p in repeats if p in kb.right_keys)

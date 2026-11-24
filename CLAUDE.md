@@ -111,16 +111,20 @@ bin/e2e                 # all tests (keyboard must run the test firmware)
 bin/e2e --flash         # build + flash the test firmware first (after keymap changes)
 bin/e2e -k hexpad -v    # tests whose name contains "hexpad", verbose
 bin/e2e -x              # stop at the first failure
+bin/e2e --skip compose_letter   # leave out tests whose name contains it (repeatable)
+bin/e2e --left-only     # inject right-half keys on the left half: keymap without the split link
 ```
 
 - Needs both halves on USB and an X11 desktop (`DISPLAY`; from a shell
-  without it, e.g. Claude Code, use `DISPLAY=:1 bin/e2e`). The capture
-  window is GTK (via IBus like real apps, so compose and Ctrl+Shift+U
-  unicode entry work); `bin/e2e` re-runs itself with `/usr/bin/python3`
-  when the current Python has no PyGObject.
+  without it, e.g. Claude Code, use `DISPLAY=:1 bin/e2e`) or Hyprland
+  (Wayland; detected by `HYPRLAND_INSTANCE_SIGNATURE`). The capture
+  window is GTK (via the desktop's input method, IBus or fcitx5, like real
+  apps, so compose and Ctrl+Shift+U unicode entry work); `bin/e2e` re-runs
+  itself with `/usr/bin/python3` when the current Python has no PyGObject.
 - A capture window ("Adv360 e2e capture") takes the keyboard focus. Focus is
-  verified (Tk + `xdotool getactivewindow`) before **every** key press and
-  the test aborts instead of typing elsewhere. Don't type while tests run.
+  verified (GTK + `xdotool getactivewindow`, on Hyprland `hyprctl
+  activewindow`) before **every** key press and the test aborts instead of
+  typing elsewhere. Don't type while tests run.
 - Tests check exactly what the OS received (`assertTyped`). Failure messages
   include the X key events and the keyboard's own event log with timings
   (`P <pos> <1|0>` key, `L <mask> <top>` layers).
@@ -151,10 +155,13 @@ class TestThing(E2ETestCase):
   Every press waits for the keyboard's acknowledgement and until follow-up
   events (macro layer changes) have settled: no sleeps in tests.
 - Right-half keys are injected on the right half (`kb.right`, its own
-  key-monitor port), so they arrive over Bluetooth, a few ms to ~20 ms late,
-  like real typing. `kb.play([(delay, pos, pressed), ...])` plays a timed
-  script without waiting in between, for cross-half races (see
-  `test_split_timing.py`); `kb.left_times`/`kb.right_times` hold each
+  key-monitor port), so they arrive over the split link like real typing.
+  A noisy 2.4 GHz channel shows up as "keyboard didn't acknowledge 'P <pos>
+  1'" for right-half keys (key-monitor `R`: high `retries`/`resyncs`);
+  `--left-only` then still tests the keymap. `kb.play([(delay, pos,
+  pressed), ...])` plays a timed script without waiting in between, for
+  cross-half races (see `test_split_timing.py`);
+  `kb.left_times`/`kb.right_times` hold each
   half's device timestamps. The left half's key monitor reports keys when
   split-timing releases them for processing (~20 ms after the press).
 - `with kb.fast(gap=0.03):` types without waiting for macros/layers to
@@ -166,7 +173,11 @@ class TestThing(E2ETestCase):
   Esc tapped (ends caps word, which is a toggle). If a feature adds other
   lingering state, extend `E2ETestCase.tearDown`.
 - Expected text assumes the host uses the US keyboard layout; compose
-  macros (š ž õ ...) depend on the host's compose key setup.
+  macros (š ž õ ...) need ScrollLock as the host's Compose key (XKB
+  `compose:sclk`) and Esc must stay Escape. Hosts that remap keys for a
+  laptop keyboard need a per-device override for the Kinesis (Hyprland:
+  `hl.device({ name = "kinesis-corporation-adv360-pro-keyboard",
+  kb_options = "compose:sclk" })`).
 
 ## Latency experiments
 

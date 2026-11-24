@@ -1,6 +1,6 @@
 """End-to-end test harness: drive the real keyboard, check what the OS types.
 
-Needs the TEST firmware (bin/flash.sh --test) and an X11 desktop.
+Needs the TEST firmware (bin/flash.sh --test) and an X11 desktop or Hyprland.
 
   * Keyboard  - injects key presses through the key-monitor ports. Keys of
                 the right half are pressed on the right half (its own
@@ -25,6 +25,7 @@ Writing a test:
             self.assertTyped("7")
 """
 
+import json
 import os
 import queue
 import re
@@ -311,14 +312,19 @@ class Keyboard:
 
 class Capture:
     """A GTK window with a text view that owns the keyboard focus. Everything
-    the keyboard types lands here, through the same input method (IBus) as in
-    normal GTK apps, so compose sequences and Ctrl+Shift+U unicode entry work.
-    Key events are recorded too."""
+    the keyboard types lands here, through the same input method (IBus,
+    fcitx5) as in normal GTK apps, so compose sequences and Ctrl+Shift+U
+    unicode entry work. Key events are recorded too.
+
+    Focus is checked with the window manager before every key press: on X11
+    with xdotool, on Hyprland (Wayland, where xdotool sees no native windows)
+    with hyprctl."""
 
     TITLE = "Adv360 e2e capture"
 
     def __init__(self):
-        if not os.environ.get("DISPLAY"):
+        self.hyprland = bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"))
+        if not (self.hyprland or os.environ.get("DISPLAY")):
             raise E2EError("DISPLAY is not set: run the e2e tests from your desktop session")
         import gi
         gi.require_version("Gtk", "3.0")
@@ -379,10 +385,34 @@ class Capture:
             self._window_id = int(ids[-1]) if ids else None
         return self._window_id
 
+    @staticmethod
+    def _hyprctl(*args):
+        try:
+            r = subprocess.run(["hyprctl", *args], capture_output=True, text=True, timeout=2)
+            return r.stdout
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
+
+    def _hypr_focused(self):
+        """Hyprland's own idea of the focused window is this one."""
+        try:
+            active = json.loads(self._hyprctl("-j", "activewindow") or "{}")
+        except ValueError:
+            return False
+        return active.get("pid") == os.getpid() and active.get("title") == self.title
+
+    def _hypr_activate(self):
+        # Lua config (Hyprland >= 0.55); older versions take the plain dispatcher
+        out = self._hyprctl("dispatch", f'hl.dsp.focus({{ window = "pid:{os.getpid()}" }})')
+        if out.startswith("error"):
+            self._hyprctl("dispatch", "focuswindow", f"pid:{os.getpid()}")
+
     def has_focus(self):
         self.pump()
         if not (self.win.is_active() and self.view.has_focus()):
             return False
+        if self.hyprland:
+            return self._hypr_focused()
         active = self._xdotool("getactivewindow")
         return bool(active) and self.window_id is not None and int(active[0]) == self.window_id
 
@@ -390,7 +420,9 @@ class Capture:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             self.win.present()
-            if self.window_id is not None:
+            if self.hyprland:
+                self._hypr_activate()
+            elif self.window_id is not None:
                 self._xdotool("windowactivate", str(self.window_id))
             self.view.grab_focus()
             self.pump(0.1)
@@ -475,12 +507,19 @@ class Session:
             raise E2EError(f"firmware doesn't allow injection: {self.monitor.hello}")
         self.monitor.start()
         # Optional: right-half keys are then pressed on the right half.
+        # ADV360_E2E_LEFT_ONLY (bin/e2e --left-only): inject them on the left
+        # half too, i.e. test the keymap without the split link (a noisy
+        # radio channel makes right-half keys arrive late or not at all).
+        self.right = None
+        if os.environ.get("ADV360_E2E_LEFT_ONLY"):
+            print("e2e: --left-only: right-half keys are injected on the left half, "
+                  "the split link is not tested", file=sys.stderr)
+            return
         right = KeyMonitor(self.kb.on_right_message, product=RIGHT_PRODUCT)
         if right.connect() and "inject=1" in (right.hello or ""):
             self.right = self.kb.right = right.start()
         else:
             right.close()
-            self.right = None
             print("e2e: the right half has no key monitor (old test firmware?), "
                   "its keys are injected on the left half", file=sys.stderr)
 
