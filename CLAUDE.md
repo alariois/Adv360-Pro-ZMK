@@ -7,6 +7,15 @@ keyboard. **No Bluetooth** in the daily firmware: the halves talk over a
 custom encrypted radio link (`zmk-modules/split-radio`, ~1 ms), the left
 half is on USB, the right half runs on its battery.
 
+**This keyboard is hardware-modified, and the firmware here matches it.**
+After a water spill the right half's P0.07 died (column 2, whose only key is
+the original Hexpad key, position 70). That key's column is now wired to
+**P0.22** instead; `config/adv360_right.overlay` overrides
+Kinesis' `col-gpios` accordingly (`config/boards/` stays untouched). On an
+unmodified right half this firmware loses that one key. Never drive P0.07
+on the right half again, and don't use P0.22 for anything else. Details and
+diagnosis: `docs/keyfix.md`.
+
 ## Layout of the repo
 
 | Path | What |
@@ -15,7 +24,7 @@ half is on USB, the right half runs on its battery.
 | `config/user_macros.dtsi` | **Generated** by `node macro_gen.js`, never edit by hand |
 | `macro_gen.js` | Generates per-key macros, compose macros (š ž õ ä ö ü °), shift-proof digits (`&unshifted_n0..9`) |
 | `config/macros.dtsi`, `config/boards/` | Kinesis upstream, don't edit (keeps upstream merges clean) |
-| `config/adv360.conf`, `config/adv360_right.overlay` | Enable the USB bootloader reset; the right half gets its own CDC ACM port. Never add `config/adv360.overlay`: ZMK picks only the first matching overlay and it would shadow `adv360_right.overlay` |
+| `config/adv360.conf`, `config/adv360_right.overlay` | Enable the USB bootloader reset; the right half gets its own CDC ACM port. The overlay also has the **hardware mod**: the right half's column 2 on P0.22 instead of the dead P0.07 (see the top of this file). Never add `config/adv360.overlay`: ZMK picks only the first matching overlay and it would shadow `adv360_right.overlay` |
 | `zmk-modules/usb-bootloader-reset` | Zephyr module: 1200 baud "touch" on a USB serial port reboots that half into the UF2 bootloader. Also the hardware watchdog (`CONFIG_ZMK_WATCHDOG`): a hung half resets itself within 4 s (reset reason in the key monitor's hello, `reset=2`), with breadcrumbs (`zmk_crumb()`, key-monitor `C`) |
 | `zmk-modules/smart-keys` | Daily-firmware behaviors (central half only): `&lshift`/`&rshift` sticky Shift (`zmk,behavior-sticky-shift`: tapped alone = Shift + LShift/RShift layer for the next key that types something or 1 s; held or with another key pressed meanwhile = plain; with Ctrl/Alt/Super held = plain; tapped twice = caps word via the Shift layer), `&repeat` smart repeat key (also inside a Ctrl+Shift+U unicode entry: repeats the last hex digit; symbols replay with their recorded Shift, letters take the current Shift/caps word), `&sl_hex` one-shot Hexpad layer (tap again = off, Enter on release after unicode entry), `&caps_wd` caps word (compose letters Ö Š uppercase, lights the caps lock LED by `--wrap`ping `zmk_hid_indicators_get_current_profile`), mod-morph unmask on next key. Its listeners run before ZMK's own (module objects link first) and it observes HID modifier state by `--wrap`ping `zmk_hid_masked_modifiers_set/clear` and `zmk_hid_implicit_modifiers_press` |
 | `zmk-modules/split-timing` | Left half: processes the key events of both halves in **press order**, `ZMK_SPLIT_TIMING_DELAY_MS` after each press (1 ms with split-radio, which gives exact press times; 20 ms over Bluetooth, where the right half notifies timestamps on its own GATT characteristic and the left half estimates the clock offset). Must be **first** in `EXTRA_MODULES` (its listener captures key events before all others). Bluetooth-only experiments: heartbeat/watermark, link tuning (`src/link_tuning.c`), `experiments/` |
@@ -23,7 +32,7 @@ half is on USB, the right half runs on its battery.
 | `zmk-modules/key-monitor` | **Test-only** module (snippet `key-monitor`): USB serial port that streams key positions (with device uptime)/layer changes and accepts injected presses. On both halves: on the right one it only injects/reports that half's keys, which then reach the left half over the real split link. Protocol in its `Kconfig` |
 | `tools/adv360/` | Stdlib-only Python: `keymap.py` (keymap/layout parser + key labels), `device.py` (key-monitor connection), `fmt.py` (keymap formatter) |
 | `bin/` | `build.sh` (runs in Docker), `flash.sh`, `keymap-ui`, `e2e`, `split-bench` (split latency benchmark), `split-soak` (minutes of cross-half presses, counts hangs), `matrix-probe` (raw key matrix scan of one half, bypassing ZMK: which pins see a key, pads that can't reach their level; test firmware) |
-| `docs/keyfix.md` | Open hardware repair: the original Hexpad key (position 70) died after a water spill; diagnosis so far, raw matrix test plan, wire + `col-gpios` override plan |
+| `docs/keyfix.md` | Hardware repair of the original Hexpad key (position 70) after a water spill: how the matrix works, the raw matrix diagnosis (P0.07 dead), the fix (wire to P0.22, `col-gpios` override) |
 | `docs/split-latency-research.md` | Measured latency of every split option (BLE tuning, short intervals, raw radio), what worked and what didn't |
 | `tests/e2e/` | End-to-end tests against the real keyboard |
 

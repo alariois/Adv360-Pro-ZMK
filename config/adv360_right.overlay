@@ -12,3 +12,27 @@
         compatible = "zephyr,cdc-acm-uart";
     };
 };
+
+/*
+ * HARDWARE MOD on this keyboard (docs/keyfix.md): P0.07 of the right half
+ * died after a water spill (it can't drive its pad high any more), which
+ * killed its only key, the original Hexpad key (position 70, RC(0,12)).
+ * A wire now connects that key's column to P0.22 instead. Same list as
+ * Kinesis' adv360_right.dts, only the third column changed. Firmware with
+ * this override on an unmodified right half loses that key; the stock
+ * firmware on this keyboard does the same (P0.07 can't drive it).
+ */
+&kscan0 {
+    col-gpios
+        = <&gpio0 12 GPIO_ACTIVE_HIGH>
+        , <&gpio1  9 GPIO_ACTIVE_HIGH>
+        , <&gpio0 22 GPIO_ACTIVE_HIGH>  /* was P0.07 */
+        , <&gpio1 11 GPIO_ACTIVE_HIGH>
+        , <&gpio1 10 GPIO_ACTIVE_HIGH>
+        , <&gpio1 13 GPIO_ACTIVE_HIGH>
+        , <&gpio1 15 GPIO_ACTIVE_HIGH>
+        , <&gpio0  3 GPIO_ACTIVE_HIGH>
+        , <&gpio0  2 GPIO_ACTIVE_HIGH>
+        , <&gpio0 28 GPIO_ACTIVE_HIGH>
+        ;
+};

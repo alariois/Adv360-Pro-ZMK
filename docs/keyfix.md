@@ -1,7 +1,13 @@
-# Broken key after the water spill: diagnosis and fix plan
+# Broken key after the water spill: diagnosis and fix
 
-Status 2026-11-24: diagnosis in progress, nothing soldered yet, no firmware
-change for it yet. This file is the hand-over to continue on another PC.
+Status 2026-11-24: **fixed.** P0.07 on the right half is dead (raw matrix
+probe, below). A wire now connects the key's column to **P0.22**, and
+`config/adv360_right.overlay` moves column 2 there. Verified with
+`bin/matrix-probe`: P0.22 reads back high when driven and low when released
+(`drv=3ff rel=0`, so the old net doesn't load it), and the key is seen on
+row 0 x P0.22 at every settle time and reported by ZMK (position 70), alone
+and together with other keys. The steps below are the diagnosis that led
+there.
 
 ## The key
 
@@ -20,11 +26,12 @@ change for it yet. This file is the hand-over to continue on another PC.
 | Check | Result |
 |---|---|
 | Switch with a multimeter | works |
-| Key monitor (test firmware) while pressing | **no position at all**: an open path, not a short to another line (a short would show up as a different key) |
+| Key monitor (test firmware) while pressing | **no position at all**: no other key shows up, so not a short to another matrix line |
 | Diode replaced (with the one from the neighbouring position) | still dead: the diode wasn't the problem |
 | Measured on top of the Holyiot module | the key press "comes in on the pin" (which pin exactly: **to confirm**) |
 | Row 0 (P0.19) | fine: the new Hexpad key, Backspace, `:` `/` down up and the corner Super key are on it and work |
 | Column 12 (P0.07) | serves **only this key**: a fault there shows nowhere else |
+| Raw matrix probe, 2026-11-24 (`bin/matrix-probe`) | **P0.07 reads low while driven high**, with the standard and the high drive (H0H1), at every settle time (0 us - 1 ms), and also as an input with only the pull-up. The other 9 right columns and all 10 left columns (the left half's own P0.07 included) read back fine |
 
 What the voltages mean (keyboard on, idle ZMK drives all columns high and
 waits for a row to go high):
@@ -41,45 +48,76 @@ waits for a row to go high):
   work during the scan), or its solder joint under the module.
 - If only **P0.07** was measured: it is high anyway, that proves nothing.
 
-## Step 1: raw matrix test (firmware, not written yet)
+## Step 1: raw matrix test (`bin/matrix-probe`)
 
 Goal: find out for sure whether the chip sees the key, bypassing ZMK.
 
-Implementation plan (test firmware only, `zmk-modules/key-monitor`):
+Key-monitor command `M [<us>]` (test firmware, both halves; protocol in
+`zmk-modules/key-monitor/Kconfig`): for each column of this half's matrix
+(pins from the devicetree), with interrupts locked, drive only that column,
+wait `<us>`, read all rows, restore the outputs. It also reports the rows as
+found (`idle`: idle ZMK drives all columns, like the multimeter test) and
+reads every column pad back while driven (`drv`/`rel`: a pin that can't
+reach its level).
 
-- New key-monitor command `M` (works on both halves, the broken key is on
-  the right one). For each column of this half's `kscan0` (pins from the
-  devicetree: `row-gpios` / `col-gpios`, `GPIO_DT_SPEC_GET_BY_IDX` on
-  `DT_NODELABEL(kscan0)`), with interrupts locked (a few us per column, so
-  ZMK's scanning doesn't interfere):
-  set all columns inactive, set this column active, wait ~10 us, read all
-  rows, then restore the outputs as they were.
-- Reply: `M c0=<row bits hex> c1=... c9=...` (bit n = row n pressed).
-- Document the command in `zmk-modules/key-monitor/Kconfig` like the others.
+The settle time matters: ZMK reads the rows **0 us** after driving a column
+(`CONFIG_ZMK_KSCAN_MATRIX_WAIT_BEFORE_INPUTS` defaults to 0). Corrosion that
+adds resistance makes the row rise slowly: idle (all columns high) still
+fires the row interrupt, but ZMK's scan reads too early and sees nothing,
+which also looks like "no position at all".
 
 Running it:
 
 1. Plug the **right half into USB** (it normally runs on battery).
 2. `bin/flash.sh --test` (builds + flashes the test firmware on both halves).
-3. Hold the broken key, send `M` to the right half's key monitor, e.g.:
-   ```sh
-   /usr/bin/python3 -c "
-   import sys,time; sys.path.insert(0,'tools')
-   from adv360.device import KeyMonitor, RIGHT_PRODUCT
-   L=[]; m=KeyMonitor(L.append, product=RIGHT_PRODUCT); m.connect(); m.start()
-   m.send('M'); time.sleep(0.5); m.stop(); print([l for l in L if l.startswith('M')])"
-   ```
-   Compare with a working key on the same row (e.g. the new Hexpad key,
-   position 68 = RC(0,10) = column index 0).
+3. `bin/matrix-probe` (right half, watch mode): hold the broken key, then a
+   working key on the same row for comparison (the new Hexpad key, position
+   68 = RC(0,10) = column index 0). Every change is printed with the pins,
+   the settle times at which the key is seen and what ZMK reports.
+   `--once` prints one sweep with the raw replies.
 4. `bin/flash.sh` puts the normal firmware back.
 
-Reading the result for the broken key (column index 2, row 0):
+Reading the result for the broken key (position 70, row 0 P0.19 x column 2
+P0.07):
 
-- `c2` has bit 0 set while held: the chip sees it, the hardware is fine and
-  the problem is in software (unexpected: same firmware worked before the
-  spill).
-- `c2` stays 0 (and the working key shows up in `c0`): **P0.07 or its
-  joint is the problem** -> step 2.
+| `bin/matrix-probe` says | Meaning | Next |
+|---|---|---|
+| seen at every wait | the chip sees it at 0 us like ZMK should | software (unexpected) |
+| seen only from N us | slow path (corrosion) | `CONFIG_ZMK_KSCAN_MATRIX_WAIT_BEFORE_INPUTS` > N, or clean/rework the trace |
+| row 0 high with all columns driven, no single column drives it | path intact when everything drives, P0.07 alone doesn't | P0.07 drive / joint -> step 2 |
+| `col 2 P0.07: pad does NOT read back high` | the pin itself can't go high (damaged or shorted) | step 2, check P0.07 for a short |
+| nothing pressed (and the working key shows up) | open path between P0.07 and the row | find the break (P0.07 pad -> switch); a wire from the P0.07 pad may be enough, else step 2 |
+
+## Step 1b: find the short (multimeter, keyboard off)
+
+The probe reads every pad back through the chip's own input buffer, so
+"reads low" has two explanations:
+
+- the column-12 net is held at ground: a short (corrosion along the trace,
+  under the module), the pad then measures ~0 V with the keyboard on;
+- the P0.07 cell inside the chip is damaged: its input reads low regardless,
+  and its output is dead or too weak to lift the row through the switch and
+  diode (13 kOhm pull-down). The pad can then still measure ~3 V idle with a
+  multimeter and sag when the key is held.
+
+The pad voltage with the keyboard on (idle ZMK drives all columns high) tells
+them apart: ~3 V idle means no short, the damage is inside the module. A short
+would also cost battery (idle ZMK drives P0.07 high into it).
+
+With the right half **off and unplugged** (battery switch off):
+
+1. Resistance from the P0.07 pad (on the module) to GND, and from the
+   column-side pin of the broken switch to GND. Normal: open / megaohms
+   (diode mode may show a chip-internal ESD diode one way, ~0.5-0.7 V).
+   A few ohms to kilohms: the short.
+2. If the switch pin is shorted: look for corrosion (white/green residue)
+   along the trace and under the module edge near P0.07, clean with
+   isopropyl alcohol and a soft brush, dry, measure again. Then
+   `bin/matrix-probe --once`: `drv` back to `3ff` means fixed.
+3. If cleaning doesn't help, cut the trace next to the switch and measure
+   both sides: switch side clean -> the short is on the P0.07 side (pad,
+   module, trace) -> step 2 with the wire straight to the switch. Switch side
+   still shorted -> the problem is at the switch footprint itself.
 
 ## Step 2: move the column to a free pin (wire + firmware)
 
@@ -106,10 +144,10 @@ Before using one:
    to GND or 3 V).
 3. Prefer a pad close to the P0.07 pad or to the switch (shortest wire).
    Neighbouring numbers (P0.06, P0.08) are often neighbouring pads, check.
-4. Check **P0.07 for a short** (keyboard off: P0.07 to GND and to 3 V). The
-   firmware stops driving P0.07 after the change, so the old trace may stay
-   connected - unless P0.07 is shorted, which would pull the new wire too:
-   then cut the trace to the P0.07 pad.
+4. **P0.07 is held low** (step 1, find where in step 1b): the old net
+   would pull the new wire low too. The column-12 trace must be **cut**
+   between the switch and the short, and the new wire go straight to the
+   switch pin. The firmware stops driving P0.07 after the change.
 
 ### Wire
 
@@ -144,9 +182,9 @@ the third entry changed, e.g. for P0.08:
 ```
 
 Then `bin/flash.sh` (right half on USB), test the key with the key monitor
-(`bin/flash.sh --test`, `bin/keymap-ui`) and type with it. If it works, the
-workaround Hexpad key at position 68 can go back to `&macro_lalt_mo_1`
-(see the comment above the Base layer in `config/adv360.keymap`).
+(`bin/flash.sh --test`, `bin/keymap-ui`) and type with it. Done
+2026-11-24: works, and the workaround Hexpad key at position 68 (the stock
+PgDn position) is right Alt again (`&macro_ralt_mo_1`, `&kp RALT` on QWERTY).
 
 ## Continuing on another PC
 
@@ -155,5 +193,5 @@ workaround Hexpad key at position 68 can go back to `&macro_lalt_mo_1`
   with that build (`bin/flash.sh` does both). Or copy `.split-radio-key`
   from the old PC to the repo root first.
 - Flashing the right half needs it on USB.
-- Tests need the test firmware and an X11 desktop (`DISPLAY=:1 bin/e2e`),
+- Tests need the test firmware and an X11 desktop (`DISPLAY=:1 bin/e2e`) or Hyprland,
   see `CLAUDE.md`.

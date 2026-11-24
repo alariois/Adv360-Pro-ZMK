@@ -19,7 +19,8 @@ class TestQwertyLayout(E2ETestCase):
         self.modifiers = {
             "left Ctrl": kb.key("Ctrl", sub="QWERTY", nth=0),
             "right Ctrl": kb.key("Ctrl", sub="QWERTY", nth=1),
-            "Alt": kb.key("Alt", sub="QWERTY"),
+            "left Alt": kb.key("Alt", sub="QWERTY"),
+            "right Alt": kb.key("AltGr", sub="QWERTY"),
             "left Shift": kb.key("Shift", sub="LShift"),
         }
 
