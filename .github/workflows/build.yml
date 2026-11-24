@@ -23,7 +23,7 @@ jobs:
           print(f"{len(data['layers'])} layers, {len(data['layout'])} keys")
           EOF
       - name: Python tools compile
-        run: python3 -m py_compile bin/keymap-ui bin/e2e bin/split-bench bin/split-soak bin/matrix-probe tools/adv360/*.py tests/e2e/*.py
+        run: python3 -m py_compile bin/keymap-ui bin/e2e bin/split-bench bin/split-soak bin/matrix-probe bin/link-log tools/adv360/*.py tests/e2e/*.py
 
   build:
     name: Build (${{ matrix.name }})

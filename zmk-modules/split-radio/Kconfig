@@ -31,7 +31,13 @@ config ZMK_SPLIT_RADIO_FREQUENCY
 
 config ZMK_SPLIT_RADIO_TX_POWER
 	int "TX power register value (0 = 0 dBm, 8 = +8 dBm, 0xFC = -4 dBm)"
-	default 0
+	default 8
+	help
+	  +8 dBm, the nRF52840's maximum. At 0 dBm the link had no margin next
+	  to office interference: 64-82 % of the right half's frames failed and
+	  it dropped for seconds; +8 dBm on the same desk, switched back and
+	  forth: 2-6 %, no outages (docs/split-latency-research.md). The right
+	  half sends ~1.4 ms per second: ~15 uA more on its battery.
 
 config ZMK_SPLIT_RADIO_ACK_DELAY_US
 	int "Left half: ack this long after a frame (the right half must be listening)"

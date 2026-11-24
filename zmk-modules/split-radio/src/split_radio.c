@@ -103,6 +103,38 @@ static struct packet tx_pkt; /* frames this half sends */
 static uint8_t key[16];
 static uint32_t session, challenge;
 static struct split_radio_stats stats;
+
+/* Signal strength of the other half's valid frames and (left half) the
+ * channel's noise while only listening, in -dBm, since the last report
+ * (key monitor R): tells a weak link (antenna) from a noisy channel. */
+struct rssi_acc {
+    uint32_t sum, n;
+    uint8_t min, max;
+};
+static struct rssi_acc sig_acc;
+
+static void rssi_add(struct rssi_acc *a, uint8_t v) {
+    if (a->n == 0 || v < a->min) {
+        a->min = v;
+    }
+    if (a->n == 0 || v > a->max) {
+        a->max = v;
+    }
+    a->sum += v;
+    a->n++;
+}
+
+/* " name=-avg(-min..-max)" and reset; strongest first */
+static int rssi_text(char *buf, size_t len, const char *name, struct rssi_acc *a) {
+    unsigned int lock = irq_lock();
+    struct rssi_acc c = *a;
+    *a = (struct rssi_acc){0};
+    irq_unlock(lock);
+    if (c.n == 0) {
+        return snprintf(buf, len, " %s=none", name);
+    }
+    return snprintf(buf, len, " %s=-%u(-%u..-%u)dBm", name, (unsigned)(c.sum / c.n), c.min, c.max);
+}
 static int64_t last_link_ms = -100000; /* last valid frame from the other half */
 
 /* ---- crypto ------------------------------------------------------------------ */
@@ -180,7 +212,9 @@ static uint32_t now_us(void) { return (uint32_t)k_ticks_to_us_floor64(k_uptime_t
  * ramp-up (40 us) + preamble, address, length, payload, CRC at 2 Mbit/s. */
 static inline uint32_t air_time_us(uint8_t payload_len) { return 40 + (2 + 5 + 1 + payload_len + 2) * 4; }
 
-#define SHORTS_BASE (RADIO_SHORTS_READY_START_Msk | RADIO_SHORTS_END_DISABLE_Msk)
+/* RSSI sampled at every address match: the signal strength of each frame */
+#define SHORTS_BASE                                                                                \
+    (RADIO_SHORTS_READY_START_Msk | RADIO_SHORTS_END_DISABLE_Msk | RADIO_SHORTS_ADDRESS_RSSISTART_Msk)
 
 static void radio_configure(void) {
     uint8_t addr_block[16] = "adv360 split adr";
@@ -408,6 +442,7 @@ static void radio_isr(const void *arg) {
     uint32_t rx_us = now_us();
     uint32_t rx_cycles = k_cycle_get_32();
     if (rx_ok(&rx_pkt)) {
+        rssi_add(&sig_acc, NRF_RADIO->RSSISAMPLE);
         handle_frame(rx_us);
     } else {
         stats.crc_errors++;
@@ -492,12 +527,33 @@ bool zmk_ble_active_profile_is_connected(void) {
     return k_uptime_get() - last_link_ms < LINK_TIMEOUT_MS;
 }
 
+/* channel noise: sample the RSSI while the receiver waits for a frame */
+static struct rssi_acc noise_acc;
+
+static void noise_sample(struct k_timer *t) {
+    if ((NRF_RADIO->STATE & RADIO_STATE_STATE_Msk) != RADIO_STATE_STATE_Rx) {
+        return;
+    }
+    NRF_RADIO->EVENTS_RSSIEND = 0;
+    NRF_RADIO->TASKS_RSSISTART = 1;
+    for (int i = 0; i < 100 && !NRF_RADIO->EVENTS_RSSIEND; i++) {
+    }
+    if (NRF_RADIO->EVENTS_RSSIEND) {
+        rssi_add(&noise_acc, NRF_RADIO->RSSISAMPLE);
+    }
+}
+K_TIMER_DEFINE(noise_timer, noise_sample, NULL);
+
 static void role_start(void) {
     /* USB powered: keep the crystal and the receiver on */
     z_nrf_clock_bt_ctlr_hf_request();
     hf_wait_running();
     radio_start(&rx_pkt, false);
     k_work_reschedule(&link_work, K_MSEC(1000));
+    if (IS_ENABLED(CONFIG_ZMK_KEY_MONITOR)) {
+        /* test builds only: only the key monitor (R) reports it */
+        k_timer_start(&noise_timer, K_MSEC(5), K_MSEC(5));
+    }
 }
 
 #else
@@ -714,6 +770,7 @@ static void radio_isr(const void *arg) {
         k_timer_start(&ack_timer, K_USEC(CONFIG_ZMK_SPLIT_RADIO_ACK_TIMEOUT_US), K_NO_WAIT);
     } else if (state == WAIT_ACK) {
         if (rx_ok(&ack_pkt)) {
+            rssi_add(&sig_acc, NRF_RADIO->RSSISAMPLE);
             handle_ack();
         } else {
             stats.crc_errors++;
@@ -832,11 +889,14 @@ const struct split_radio_stats *split_radio_get_stats(void) { return &stats; }
 
 static int debug_text(char *buf, size_t len) {
 #if CENTRAL
-    return snprintf(buf, len, " leds=%02x%02x%02x%02x bl=%u/%u", leds[0], leds[1], leds[2],
-                    leds[3], leds[4], leds[5]);
+    int n = rssi_text(buf, len, "sig", &sig_acc);
+    n += rssi_text(buf + n, len - n, "noise", &noise_acc);
+    return n + snprintf(buf + n, len - n, " leds=%02x%02x%02x%02x bl=%u/%u", leds[0], leds[1],
+                        leds[2], leds[3], leds[4], leds[5]);
 #else
-    return snprintf(buf, len, " state=%d hf_on=%d q=%d leds=%02x%02x%02x%02x bl=%u/%u", state,
-                    hf_on, q_len, leds[0], leds[1], leds[2], leds[3], leds[4], leds[5]);
+    int n = rssi_text(buf, len, "sig", &sig_acc);
+    return n + snprintf(buf + n, len - n, " state=%d hf_on=%d q=%d leds=%02x%02x%02x%02x bl=%u/%u",
+                        state, hf_on, q_len, leds[0], leds[1], leds[2], leds[3], leds[4], leds[5]);
 #endif
 }
 

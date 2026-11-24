@@ -223,6 +223,19 @@ the link's 2450 MHz):
 
   2450 sits between the side bands of Wi-Fi channels 6 and 11 (here an
   access point on 11 at full signal); 2477 is above channel 11's band edge
+* TX power +8 dBm instead of 0 dBm (both halves). Half an hour later 2477
+  MHz was as bad as 2450 had been: the interference comes and goes, at
+  0 dBm the link has no margin. Link counters every 2 s with both halves on
+  USB, power switched back and forth (2477 MHz):
+
+  | TX power | failed tries | CRC errors (left) | 1 s outages | link down > 300 ms |
+  |---|---|---|---|---|
+  | 0 dBm | 82 % | 643 | 10 | 17 of 40 samples |
+  | +8 dBm | 6 % | 11 | 0 | 0 of 42 |
+  | 0 dBm | 64 % | 198 | 2 | 11 of 33 |
+  | +8 dBm | 2 % | 2 | 0 | 0 of 36 |
+
+  The right half sends ~1.4 ms per second: +8 dBm costs it ~15 uA
 
 Measured on the final test build (right half on USB):
 

@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""Split-radio link quality over time (TEST firmware): reads both halves'
+counters (key-monitor R) every few seconds and prints what changed.
+
+The left half's numbers cover everything the right half manages to send, so
+this also works with the right half on its battery (its own column then
+stays empty). Key presses are only counted, never shown.
+
+Usage: bin/link-log [--left] [SECONDS] [INTERVAL]   (default 600 s, every 2 s)
+  --left   don't open the right half's port even when it's on USB: with the
+           port open the right half sends a line over USB for every key
+           press, USB traffic that may disturb its radio
+
+Columns per interval:
+  R ok/rs/hs   right half: frames acked / resends / handshakes (resyncs)
+  R down       ms since its last ack when sampled (link down if large)
+  R sig        signal of the left half's acks at the right half, -dBm avg
+  L ok/crc     left half: valid frames / frames with CRC errors (noise)
+  L sig        signal of the right half's frames, -dBm avg (min..max)
+  L noise      channel noise while listening, -dBm avg (strongest)
+  keys         key presses the left half processed
+Ctrl-C ends early; a summary follows either way.
+"""
+
+import re
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+
+from adv360.device import LEFT_PRODUCT, RIGHT_PRODUCT, KeyMonitor  # noqa: E402
+
+COUNTERS = ("frames", "retries", "crc", "bad", "hellos", "resyncs")
+
+
+class Half:
+    def __init__(self, product):
+        self.replies, self.presses, self.prev = [], 0, None
+        self.km = KeyMonitor(self.on_line, product=product).start()
+
+    def on_line(self, line):
+        if line.startswith("P "):
+            self.presses += 1
+        elif line.startswith("R "):
+            self.replies.append(line)
+
+    def sample(self):
+        """(counter deltas, fields of the reply) or None without a reply."""
+        try:
+            self.km.send("R")
+        except (ConnectionError, OSError):
+            return None
+        deadline = time.monotonic() + 0.5
+        while not self.replies and time.monotonic() < deadline:
+            time.sleep(0.02)
+        if not self.replies:
+            return None
+        line = self.replies.pop()
+        self.replies.clear()
+        f = dict(re.findall(r"(\w+)=(\S+)", line))
+        now = {k: int(f[k]) for k in COUNTERS if k in f}
+        prev, self.prev = self.prev, now
+        if prev is None or any(now[k] < prev.get(k, 0) for k in now):  # first, or rebooted
+            return None
+        return {k: now[k] - prev.get(k, 0) for k in now}, f
+
+
+def rssi(f, key):
+    m = re.match(r"-(\d+)\(-(\d+)\.\.-(\d+)\)dBm", f.get(key, ""))
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
+
+
+def main():
+    args = [a for a in sys.argv[1:] if a != "--left"]
+    seconds = float(args[0]) if args else 600
+    interval = float(args[1]) if len(args) > 1 else 2
+    left = Half(LEFT_PRODUCT)
+    right = None if "--left" in sys.argv else Half(RIGHT_PRODUCT)
+    time.sleep(1.5)
+    left.sample()
+    if right:
+        right.sample()
+    total = dict(ok=0, rs=0, hs=0, crc=0, down=0, n=0, keys=0)
+    sigs, noises = [], []
+    print("time      R ok/rs/hs  R down R sig | L ok/crc  L sig         L noise      keys")
+    end = time.monotonic() + seconds
+    try:
+        while time.monotonic() < end:
+            time.sleep(interval)
+            r = right.sample() if right else None
+            l = left.sample()
+            keys, left.presses = left.presses, 0
+            if l is None:
+                print(time.strftime("%H:%M:%S"), "left half: no reply")
+                continue
+            ld, lf = l
+            rcol = "      -        -     -"
+            if r is not None:
+                rd, rf = r
+                rs = rssi(rf, "sig")
+                rcol = f"{rd['frames']:4}/{rd['retries']:4}/{rd['resyncs']:<2} {rf.get('link_ms', '?'):>6} " \
+                       f"{'-%d' % rs[0] if rs else '  -':>5}"
+                total["ok"] += rd["frames"]
+                total["rs"] += rd["retries"]
+                total["hs"] += rd["resyncs"]
+                total["down"] += int(rf.get("link_ms", 0)) > 300
+            ls, ln = rssi(lf, "sig"), rssi(lf, "noise")
+            sigs += [ls[0]] if ls else []
+            noises += [ln[1]] if ln else []
+            total["crc"] += ld["crc"]
+            total["n"] += 1
+            total["keys"] += keys
+            lsig = f"-{ls[0]}(-{ls[1]}..-{ls[2]})" if ls else "-"
+            lnoise = f"-{ln[0]}(-{ln[1]})" if ln else "-"
+            print(f"{time.strftime('%H:%M:%S')}  {rcol} | {ld['frames']:4}/{ld['crc']:<4} "
+                  f"{lsig:13} {lnoise:12} {keys:4}", flush=True)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        left.km.stop()
+        if right:
+            right.km.stop()
+    tries = total["ok"] + total["rs"]
+    print(f"\n{total['n']} samples, {total['keys']} keys | right half (on USB only): "
+          f"{100 * total['rs'] / max(1, tries):.0f}% of tries failed, {total['hs']} handshakes, "
+          f"down > 300 ms in {total['down']} samples | left half: {total['crc']} CRC errors"
+          + (f", signal avg -{sum(sigs) // len(sigs)} dBm" if sigs else "")
+          + (f", strongest noise -{min(noises)} dBm" if noises else ""))
+
+
+if __name__ == "__main__":
+    main()
