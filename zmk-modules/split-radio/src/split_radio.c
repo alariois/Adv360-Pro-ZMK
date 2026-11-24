@@ -8,9 +8,17 @@
  * polls every POLL_MS with an empty DATA frame. The left half answers every
  * valid frame with an ACK carrying its LED state (layer, indicators, ...).
  * Without an ack the frame is rebuilt (fresh ages, new counter) and resent
- * after a backoff that grows while the left half doesn't answer. The
- * crystal oscillator (needed by the radio) runs only while sending and for
- * HF_HOLD_MS after the last frame.
+ * after a backoff that grows while the left half doesn't answer. After
+ * sending, the radio switches to receiving by itself (hardware short), so the
+ * ack window doesn't depend on interrupt latency. The crystal oscillator
+ * (needed by the radio) runs only while sending and for HF_HOLD_MS after the
+ * last frame.
+ *
+ * Interference only costs resends: the right half keeps its session and
+ * handshakes again only when the left half asks (NEED_HELLO: it restarted
+ * and lost the session) or after RESYNC_MS without any ack. Key events are
+ * numbered for the whole right-half boot, across handshakes: the left half
+ * delivers each one once, also when an ack got lost.
  *
  * Left half (central, USB powered, "PRX"): listens all the time. Valid DATA
  * events are handed to split-timing with their press time on this half's
@@ -19,15 +27,22 @@
  * are released.
  *
  * Security: AES-128-CCM (4-byte MIC) with a pre-shared key built into both
- * halves' firmware, AES in the ECB hardware. Handshake per right-half boot:
- *   HELLO(session)            right -> left, authenticated
+ * halves' firmware, AES in the ECB hardware. Handshake per right-half boot
+ * (and again when the left half lost it):
+ *   HELLO(session, seq)       right -> left, authenticated (nonce counter =
+ *                             seq: the same nonce means the same message);
+ *                             seq = the oldest key event not acked yet
  *   HELLO_ACK(session, chal)  left -> right, chal = fresh random per HELLO
  *   DATA(counter, events)     nonce = dir | session | chal | counter,
  *                             counter strictly increasing, events encrypted
  *   ACK(counter, next_seq, leds)  authenticated, LED state encrypted
+ *   NEED_HELLO(counter)       left -> right, answer to a DATA frame the left
+ *                             half can't open (no session: it restarted)
  * A recorded frame can't be replayed: the left half only accepts the
  * current challenge and increasing counters. A forged ACK would need the
- * key. A replayed HELLO only makes the right half handshake again.
+ * key. A replayed HELLO or a forged NEED_HELLO (not authenticated: the left
+ * half has no session to authenticate it with) only makes the right half
+ * handshake again, like jamming would.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -68,7 +83,7 @@ LOG_MODULE_REGISTER(split_radio, CONFIG_ZMK_LOG_LEVEL);
 
 #define CENTRAL IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
 
-enum frame_type { HELLO = 1, HELLO_ACK = 2, DATA = 3, ACK = 4 };
+enum frame_type { HELLO = 1, HELLO_ACK = 2, DATA = 3, ACK = 4, NEED_HELLO = 5 };
 enum direction { FROM_RIGHT = 0x52, FROM_LEFT = 0x4c };
 
 #define MAX_PAYLOAD 40
@@ -76,6 +91,7 @@ enum direction { FROM_RIGHT = 0x52, FROM_LEFT = 0x4c };
 #define EVENT_LEN 4 /* position, pressed, age_us (u16) */
 #define LED_LEN 6   /* status LEDs: layer, indicators, effect, on; backlight: brightness, on */
 #define LINK_TIMEOUT_MS (CONFIG_ZMK_SPLIT_RADIO_POLL_MS * 5 + 500)
+#define HELLO_HEADER 7 /* type, session, seq */
 
 /* RAM packet: S0/S1 absent, LENGTH byte, payload */
 struct packet {
@@ -83,7 +99,7 @@ struct packet {
     uint8_t data[MAX_PAYLOAD];
 } __packed;
 
-static struct packet tx_pkt, rx_pkt;
+static struct packet tx_pkt; /* frames this half sends */
 static uint8_t key[16];
 static uint32_t session, challenge;
 static struct split_radio_stats stats;
@@ -164,6 +180,8 @@ static uint32_t now_us(void) { return (uint32_t)k_ticks_to_us_floor64(k_uptime_t
  * ramp-up (40 us) + preamble, address, length, payload, CRC at 2 Mbit/s. */
 static inline uint32_t air_time_us(uint8_t payload_len) { return 40 + (2 + 5 + 1 + payload_len + 2) * 4; }
 
+#define SHORTS_BASE (RADIO_SHORTS_READY_START_Msk | RADIO_SHORTS_END_DISABLE_Msk)
+
 static void radio_configure(void) {
     uint8_t addr_block[16] = "adv360 split adr";
     uint8_t addr[16];
@@ -198,12 +216,12 @@ static void radio_configure(void) {
                         (RADIO_CRCCNF_SKIPADDR_Skip << RADIO_CRCCNF_SKIPADDR_Pos);
     NRF_RADIO->CRCPOLY = 0x11021;
     NRF_RADIO->CRCINIT = 0xffff;
-    NRF_RADIO->SHORTS = RADIO_SHORTS_READY_START_Msk | RADIO_SHORTS_END_DISABLE_Msk;
+    NRF_RADIO->SHORTS = SHORTS_BASE;
     NRF_RADIO->INTENSET = RADIO_INTENSET_DISABLED_Msk;
 }
 
-static void radio_start(bool tx) {
-    NRF_RADIO->PACKETPTR = (uint32_t)(tx ? &tx_pkt : &rx_pkt);
+static void radio_start(struct packet *pkt, bool tx) {
+    NRF_RADIO->PACKETPTR = (uint32_t)pkt;
     NRF_RADIO->EVENTS_DISABLED = 0;
     if (tx) {
         NRF_RADIO->TASKS_TXEN = 1;
@@ -212,7 +230,9 @@ static void radio_start(bool tx) {
     }
 }
 
-static bool rx_ok(void) { return NRF_RADIO->CRCSTATUS == 1 && rx_pkt.len <= MAX_PAYLOAD; }
+static bool rx_ok(const struct packet *pkt) {
+    return NRF_RADIO->CRCSTATUS == 1 && pkt->len <= MAX_PAYLOAD;
+}
 
 /* The radio needs the crystal oscillator. Requested like Zephyr's own
  * Bluetooth controller does (that controller isn't built in): the generic
@@ -229,6 +249,25 @@ static void hf_wait_running(void) {
 
 #if CENTRAL
 /* ===== left half: receiver ===================================================== */
+
+static struct packet rx_pkt;
+
+/* Fresh challenge per HELLO, made in the radio interrupt: AES of a random
+ * seed (drawn at boot) and a counter. Unique per HELLO, unpredictable
+ * without the key, and one ~7 us AES block: the hardware RNG with bias
+ * correction took so long here (several 100 us for 4 bytes) that the
+ * HELLO_ACK went out after the right half had stopped listening, and most
+ * handshakes needed several tries. */
+static uint8_t challenge_seed[16];
+static uint32_t challenge_count;
+
+static uint32_t new_challenge(void) {
+    uint8_t block[16], out[16];
+    memcpy(block, challenge_seed, sizeof(block));
+    sys_put_le32(++challenge_count, block);
+    aes_ecb(key, block, out);
+    return sys_get_le32(out);
+}
 
 static uint32_t last_counter;
 static uint16_t next_seq;
@@ -261,23 +300,28 @@ static void handle_frame(uint32_t rx_us) {
     uint8_t *f = rx_pkt.data;
     uint8_t len = rx_pkt.len;
 
-    if (len >= 5 && f[0] == HELLO) {
-        /* header: type, session */
+    if (len >= HELLO_HEADER && f[0] == HELLO) {
+        /* header: type, session, seq */
         uint32_t sess = sys_get_le32(&f[1]);
-        if (!open_frame(f, len, 5, FROM_RIGHT, sess, 0, 0)) {
+        uint16_t seq = sys_get_le16(&f[5]);
+        if (!open_frame(f, len, HELLO_HEADER, FROM_RIGHT, sess, 0, seq)) {
             stats.bad++;
             return;
         }
-        if (have_session && sess != session) {
-            /* new right-half boot: keys it held before are gone */
-            struct split_radio_event ev = {.position = RIGHT_RESTARTED};
-            k_msgq_put(&event_msgq, &ev, K_NO_WAIT);
-            k_work_submit(&raise_work);
+        if (!have_session || sess != session) {
+            if (have_session) {
+                /* new right-half boot: keys it held before are gone */
+                struct split_radio_event ev = {.position = RIGHT_RESTARTED};
+                k_msgq_put(&event_msgq, &ev, K_NO_WAIT);
+                k_work_submit(&raise_work);
+            }
+            next_seq = seq;
         }
+        /* else the same right-half boot handshakes again: keep next_seq, so
+         * events that arrived but whose ack got lost aren't delivered twice */
         session = sess;
-        rand_bytes(&challenge, sizeof(challenge));
+        challenge = new_challenge();
         last_counter = 0;
-        next_seq = 0;
         have_session = true;
         last_link_ms = k_uptime_get();
         stats.hellos++;
@@ -289,16 +333,24 @@ static void handle_frame(uint32_t rx_us) {
         sending_ack = true;
         return;
     }
-    if (len >= 5 && f[0] == DATA && have_session) {
+    if (len >= 5 && f[0] == DATA) {
         /* header: type, counter; body: first_seq (u16), n, events */
         uint32_t counter = sys_get_le32(&f[1]);
-        if (counter <= last_counter) {
+        if (have_session && counter <= last_counter) {
             /* old counter: a replay (counters only grow), ignore */
             stats.bad++;
             return;
         }
-        if (!open_frame(f, len, 5, FROM_RIGHT, session, challenge, counter)) {
+        if (!have_session ||
+            !open_frame(f, len, 5, FROM_RIGHT, session, challenge, counter)) {
+            /* this half restarted (no session) or the right half uses a
+             * challenge this half no longer has: ask for a handshake */
             stats.bad++;
+            uint8_t *a = tx_pkt.data;
+            a[0] = NEED_HELLO;
+            sys_put_le32(counter, &a[1]);
+            tx_pkt.len = 5;
+            sending_ack = true;
             return;
         }
         last_counter = counter;
@@ -350,12 +402,12 @@ static void radio_isr(const void *arg) {
     NRF_RADIO->EVENTS_DISABLED = 0;
     if (sending_ack) { /* the ack went out: listen again */
         sending_ack = false;
-        radio_start(false);
+        radio_start(&rx_pkt, false);
         return;
     }
     uint32_t rx_us = now_us();
     uint32_t rx_cycles = k_cycle_get_32();
-    if (rx_ok()) {
+    if (rx_ok(&rx_pkt)) {
         handle_frame(rx_us);
     } else {
         stats.crc_errors++;
@@ -367,7 +419,7 @@ static void radio_isr(const void *arg) {
         while (k_cycle_get_32() - rx_cycles < wait) {
         }
     }
-    radio_start(sending_ack);
+    radio_start(sending_ack ? &tx_pkt : &rx_pkt, sending_ack);
 }
 
 /* system work queue */
@@ -444,12 +496,18 @@ static void role_start(void) {
     /* USB powered: keep the crystal and the receiver on */
     z_nrf_clock_bt_ctlr_hf_request();
     hf_wait_running();
-    radio_start(false);
+    radio_start(&rx_pkt, false);
     k_work_reschedule(&link_work, K_MSEC(1000));
 }
 
 #else
 /* ===== right half: sender ====================================================== */
+
+/* The ack is received into the frame's own buffer: the radio then goes from
+ * sending to receiving by itself (DISABLED -> RXEN short) without a new
+ * packet pointer, so catching the ack doesn't depend on how soon this half's
+ * interrupt handler runs (USB traffic on this half delayed it). */
+#define ack_pkt tx_pkt
 
 struct pending_event {
     uint16_t seq;
@@ -517,9 +575,13 @@ static void kick(void) {
 static void build_frame(void) {
     uint8_t *f = tx_pkt.data;
     if (!have_challenge) {
+        /* the oldest event not acked yet: where the left half continues
+         * when it has no session (it restarted, or this half did) */
+        uint16_t seq = q_len ? queue[q_head].seq : next_seq;
         f[0] = HELLO;
         sys_put_le32(session, &f[1]);
-        tx_pkt.len = seal(f, 5, 0, FROM_RIGHT, session, 0, 0);
+        sys_put_le16(seq, &f[5]);
+        tx_pkt.len = seal(f, HELLO_HEADER, 0, FROM_RIGHT, session, 0, seq);
         frame_events = 0;
         return;
     }
@@ -552,7 +614,8 @@ static void send_next(void) {
     }
     build_frame();
     state = TX;
-    radio_start(true);
+    NRF_RADIO->SHORTS = SHORTS_BASE | RADIO_SHORTS_DISABLED_RXEN_Msk;
+    radio_start(&tx_pkt, true);
 }
 
 static void led_apply(struct k_work *work) {
@@ -570,26 +633,24 @@ static void led_apply(struct k_work *work) {
 }
 static K_WORK_DEFINE(led_work, led_apply);
 
-/* new session: drop key presses that waited too long for the link (keep
- * releases), renumber from 0 like the left half */
+/* handshake done: drop key presses that waited too long for the link (keep
+ * releases). Their numbers stay: the left half skips what it already has. */
 static void drop_stale_presses(void) {
     uint32_t now = now_us();
     uint8_t n = 0;
     for (uint8_t i = 0; i < q_len; i++) {
         struct pending_event e = queue[(q_head + i) % ARRAY_SIZE(queue)];
         if (!e.pressed || now - e.press_us < CONFIG_ZMK_SPLIT_RADIO_STALE_MS * 1000) {
-            e.seq = n;
             queue[(q_head + n) % ARRAY_SIZE(queue)] = e; /* n <= i: safe in place */
             n++;
         }
     }
     q_len = n;
-    next_seq = n;
 }
 
 static void handle_ack(void) {
-    uint8_t *a = rx_pkt.data;
-    uint8_t len = rx_pkt.len;
+    uint8_t *a = ack_pkt.data;
+    uint8_t len = ack_pkt.len;
     if (!have_challenge && len >= 9 && a[0] == HELLO_ACK && sys_get_le32(&a[1]) == session) {
         uint32_t chal = sys_get_le32(&a[5]);
         if (!open_frame(a, len, 9, FROM_LEFT, session, chal, 0)) {
@@ -621,6 +682,15 @@ static void handle_ack(void) {
         }
         stats.frames++;
         stats.last_rtt_us = now_us() - frame_built_us;
+    } else if (have_challenge && len >= 5 && a[0] == NEED_HELLO &&
+               sys_get_le32(&a[1]) == frame_counter) {
+        /* the left half lost the session (it restarted): handshake at once */
+        have_challenge = false;
+        stats.resyncs++;
+        k_timer_stop(&ack_timer);
+        retries = 0;
+        send_next();
+        return;
     } else {
         return; /* not ours: keep waiting */
     }
@@ -636,18 +706,20 @@ static void radio_isr(const void *arg) {
         return;
     }
     NRF_RADIO->EVENTS_DISABLED = 0;
-    if (state == TX) { /* sent: wait for the ack */
+    if (state == TX) {
+        /* sent, and the short already started the receiver for the ack:
+         * no restart after it, this handler looks at what arrives */
+        NRF_RADIO->SHORTS = SHORTS_BASE;
         state = WAIT_ACK;
-        radio_start(false);
         k_timer_start(&ack_timer, K_USEC(CONFIG_ZMK_SPLIT_RADIO_ACK_TIMEOUT_US), K_NO_WAIT);
     } else if (state == WAIT_ACK) {
-        if (rx_ok()) {
+        if (rx_ok(&ack_pkt)) {
             handle_ack();
         } else {
             stats.crc_errors++;
         }
         if (state == WAIT_ACK) {
-            radio_start(false); /* keep listening until the timeout */
+            radio_start(&ack_pkt, false); /* keep listening until the timeout */
         }
     }
 }
@@ -669,8 +741,12 @@ static void ack_timeout(struct k_timer *t) {
         NRF_RADIO->TASKS_DISABLE = 1;
         stats.retries++;
         retries++;
-        if (retries == CONFIG_ZMK_SPLIT_RADIO_MAX_RETRIES) {
-            /* the left half may have restarted: handshake again */
+        if (have_challenge &&
+            k_uptime_get() - last_link_ms > CONFIG_ZMK_SPLIT_RADIO_RESYNC_MS) {
+            /* no ack for long: the left half may have restarted without its
+             * NEED_HELLO getting through. Interference alone only costs
+             * resends (a handshake used to follow 10 lost frames, ~10 ms of
+             * noise, and showed the red "disconnected" LEDs). */
             have_challenge = false;
             stats.resyncs++;
         }
@@ -799,6 +875,9 @@ static int split_radio_init(void) {
     }
     rand_bytes(&session, sizeof(session));
     rand_bytes(&challenge, sizeof(challenge));
+#if CENTRAL
+    rand_bytes(challenge_seed, sizeof(challenge_seed));
+#endif
 
     radio_configure();
     IRQ_CONNECT(RADIO_IRQn, 1, radio_isr, NULL, 0);

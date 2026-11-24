@@ -109,7 +109,7 @@ left-half key waits for a right-half message stamped at least 1 ms after it
 ## Raw radio (`zmk-modules/split-radio`, `bin/flash.sh --radio`)
 
 Both halves drive the nRF52840 radio directly (Nordic proprietary 2 Mbit,
-one channel at 2450 MHz), no Bluetooth stack:
+one channel at 2450 MHz, 2477 since 2026-11-24), no Bluetooth stack:
 
 * right half sends each key event at once with its age in us; the left half
   computes the press time on its own clock (no clock sync needed) and acks
@@ -193,6 +193,36 @@ press). Made fit for daily use:
   1 KB to 4 KB after sticky Shift + split-timing overflowed it (the
   watchdog caught that hang; the unexplained hang of the tuned Bluetooth
   configuration above may well have been the same overflow)
+
+Robustness fixes (2026-11-24), after red blinking right-half LEDs, stuck
+and doubled keys in a noisy office (Wi-Fi channel 11 at full signal next to
+the link's 2450 MHz):
+
+* the right half handshook again after 10 lost frames (~10 ms of noise):
+  the LEDs showed "disconnected" and, worse, the left half restarted its
+  event numbering, so events that had arrived but whose ack was lost came
+  in twice (doubled keys). Now it keeps its session through interference
+  and handshakes again only when the left half asks (`NEED_HELLO`: it
+  restarted) or after 1 s without an ack; event numbers run on across
+  handshakes and the HELLO tells a restarted left half where to continue
+* the left half drew each challenge from the hardware RNG inside the radio
+  interrupt; with bias correction that took so long that most HELLO_ACKs
+  went out after the right half had stopped listening (1498 HELLOs for 160
+  handshakes). Challenges are now AES(seed, counter): one HELLO per
+  handshake
+* the right half switches from sending to receiving the ack by hardware
+  short instead of in its interrupt handler, which USB traffic on that half
+  (e2e tests) delayed past the ack
+* channel 2477 MHz instead of 2450: full e2e suite over the radio, back to
+  back on the same desk, with all the fixes above:
+
+  | channel | failed tests | resends / acked frames | CRC errors (left) | 1 s outages |
+  |---|---|---|---|---|
+  | 2450 MHz | 12 of 81 (63 before the fixes) | 4290 / 1940 | 2251 | 15 |
+  | 2477 MHz | 0 of 81 | 88 / 3145 | 22 | 0 |
+
+  2450 sits between the side bands of Wi-Fi channels 6 and 11 (here an
+  access point on 11 at full signal); 2477 is above channel 11's band edge
 
 Measured on the final test build (right half on USB):
 
