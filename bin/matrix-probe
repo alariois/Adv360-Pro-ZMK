@@ -1,0 +1,206 @@
+#!/usr/bin/env python3
+"""Raw key matrix probe of one half (TEST firmware): which row/column pins
+actually see a held key, bypassing ZMK. For the key broken by the water
+spill (docs/keyfix.md), but works for any key.
+
+Sends the key monitor's "M <us>" command (zmk-modules/key-monitor) with a
+sweep of settle times: for each column, only that column is driven, then
+the rows are read after <us> microseconds. ZMK itself reads after 0 us
+(CONFIG_ZMK_KSCAN_MATRIX_WAIT_BEFORE_INPUTS).
+
+Usage: bin/matrix-probe [--left|--right] [--once] [--waits 0,1,5,...]
+  default: the right half, watch mode: hold keys, every change is printed
+  --once   one sweep, print the raw replies and the summary, exit
+
+Reading the result for a held key:
+  seen at 0 us        the chip sees it like ZMK should: hardware fine
+  seen only from N us the path is slow (corrosion?): a scan wait fixes it
+  never seen, idle row high
+                      the path is intact with all columns driven but no
+                      single column drives it: the column pin's drive
+  never seen, idle row low
+                      open path between the column pin and the row pin
+  drv/rel             a column pad that doesn't read back the level it is
+                      driven to: damaged pin or short on that column. Then
+                      hd (high drive) and pu (input + pull-up) narrow it
+                      down; all three low is a short OR a pin whose input is
+                      damaged (reads low regardless): measure the pad voltage
+"""
+
+import argparse
+import queue
+import re
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+
+from adv360 import keymap  # noqa: E402
+from adv360.device import LEFT_PRODUCT, RIGHT_PRODUCT, KeyMonitor  # noqa: E402
+
+BOARD = ROOT / "config/boards/arm/adv360"
+DEFAULT_WAITS = [0, 1, 2, 5, 10, 20, 50, 200, 1000]
+
+
+def gpios(text, prop):
+    """'P0.19' ... for a devicetree gpio list property, None without it."""
+    m = re.search(prop + r"\s*=(.*?);", keymap.strip_comments(text), re.S)
+    if not m:
+        return None
+    return [f"P{port}.{pin:02d}" for port, pin in
+            ((int(a), int(b)) for a, b in re.findall(r"<&gpio(\d)\s+(\d+)", m.group(1)))]
+
+
+class Matrix:
+    """Pins, positions and labels of one half."""
+
+    def __init__(self, side):
+        dts = (BOARD / f"adv360_{side}.dts").read_text()
+        self.rows, self.cols = gpios(dts, "row-gpios"), gpios(dts, "col-gpios")
+        # our overlay overrides Kinesis' pins (the right half's column 2 moved
+        # from P0.07 to P0.22, docs/keyfix.md)
+        overlay = ROOT / "config" / f"adv360_{side}.overlay"
+        if overlay.exists():
+            text = overlay.read_text()
+            self.rows = gpios(text, "row-gpios") or self.rows
+            self.cols = gpios(text, "col-gpios") or self.cols
+        m = re.search(r"col-offset\s*=\s*<(\d+)>", dts)
+        offset = int(m.group(1)) if m else 0
+        transform = re.search(r"map\s*=\s*<(.*?)>;", (BOARD / "adv360.dtsi").read_text(), re.S)
+        self.position = {(int(r), int(c) - offset): pos for pos, (r, c) in
+                         enumerate(re.findall(r"RC\((\d+),\s*(\d+)\)", transform.group(1)))}
+        base = keymap.load()["layers"][0]["keys"]
+        self.label = {pos: base[pos]["label"] for pos in range(len(base))}
+        self.offset = offset
+
+    def key(self, row, col):
+        pos = self.position.get((row, col))
+        name = f"pos {pos} {self.label[pos]!r}" if pos is not None else "no key"
+        return (f"{name} RC({row},{col + self.offset}): row {row} {self.rows[row]}"
+                f" x col {col} {self.cols[col]}")
+
+
+def parse(line):
+    """'M us=5 out=3ff idle=1 c0=0 ... drv=3ff rel=0' -> dict of ints."""
+    return {k: int(v, 16) if k != "us" else int(v)
+            for k, v in re.findall(r"(\w+)=(\w+)", line)}
+
+
+def sweep(km, replies, waits, zmk_pressed, timeout=1.0):
+    """One "M" probe per wait. Key events ZMK reports meanwhile ("P <pos>
+    <1|0>") update `zmk_pressed`."""
+    result = []
+    for us in waits:
+        km.send(f"M {us}")
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                line = replies.get(timeout=max(0.0, deadline - time.monotonic()))
+            except queue.Empty:
+                sys.exit(f"no reply to 'M {us}': is the TEST firmware with the M command flashed?")
+            if line.startswith("E "):
+                sys.exit(f"keyboard: {line} (needs the TEST firmware with the M command: "
+                         "bin/flash.sh --test)")
+            if line.startswith("P "):
+                pos, pressed = (int(x) for x in line.split()[1:3])
+                (zmk_pressed.add if pressed else zmk_pressed.discard)(pos)
+            if line.startswith("M "):
+                result.append(parse(line))
+                break
+    return result
+
+
+def summary(mx, probes, zmk_pressed=()):
+    """Human-readable state of one sweep (compared between sweeps)."""
+    ncols, all_cols = len(mx.cols), (1 << len(mx.cols)) - 1
+    lines = [f"ZMK reports pressed: pos {pos} {mx.label[pos]!r}" for pos in sorted(zmk_pressed)]
+    for c in range(ncols):
+        bad_hi = [p["us"] for p in probes if not p["drv"] >> c & 1]
+        bad_lo = [p["us"] for p in probes if p["rel"] >> c & 1]
+        if bad_hi:
+            hd = any(p.get("hd", 0) >> c & 1 for p in probes)
+            pu = any(p.get("pu", 0) >> c & 1 for p in probes)
+            why = ("reaches high only with the high drive: a resistive leak to ground"
+                   if hd else
+                   "but floats high with a mere pull-up: the pin's own output is dead"
+                   if pu else
+                   "not even with the high drive or as an input with a pull-up: the pad"
+                   " is held low (short), or the pin is damaged inside the chip (its input"
+                   " reads low regardless); the pad voltage with a multimeter tells which")
+            lines.append(f"col {c} {mx.cols[c]}: pad does NOT read back high when driven, {why}")
+        if bad_lo:
+            lines.append(f"col {c} {mx.cols[c]}: pad reads high although driven low")
+    seen_rows = 0
+    for r in range(len(mx.rows)):
+        for c in range(ncols):
+            waits = [p["us"] for p in probes if p[f"c{c}"] >> r & 1]
+            if not waits:
+                continue
+            seen_rows |= 1 << r
+            if len(waits) == len(probes):
+                when = "seen at every wait"
+            elif waits == [p["us"] for p in probes][-len(waits):]:
+                when = f"seen only from {waits[0]} us"
+            else:
+                when = "seen at " + ",".join(map(str, waits)) + " us (flaky)"
+            lines.append(f"{mx.key(r, c)}: {when}")
+    # idle ZMK drives all columns: a held key's row is high if its path is intact
+    idle = [p["idle"] for p in probes if p["out"] == all_cols]
+    if idle:
+        for r in range(len(mx.rows)):
+            if all(i >> r & 1 for i in idle) and not seen_rows >> r & 1:
+                lines.append(f"row {r} {mx.rows[r]}: high with all columns driven, "
+                             "but no single column drives it")
+    return lines or ["nothing pressed"]
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    side = ap.add_mutually_exclusive_group()
+    side.add_argument("--left", action="store_const", dest="side", const="left")
+    side.add_argument("--right", action="store_const", dest="side", const="right")
+    ap.add_argument("--once", action="store_true", help="one sweep, then exit")
+    ap.add_argument("--waits", default=",".join(map(str, DEFAULT_WAITS)),
+                    help="settle times in us (0-1000), comma separated")
+    args = ap.parse_args()
+    side = args.side or "right"
+    waits = [int(w) for w in args.waits.split(",")]
+
+    mx = Matrix(side)
+    replies = queue.Queue()
+    km = KeyMonitor(replies.put, product=RIGHT_PRODUCT if side == "right" else LEFT_PRODUCT)
+    if not km.connect():
+        sys.exit(f"{side} half: no key monitor port (TEST firmware: bin/flash.sh --test)")
+    km.start()
+    print(f"{side} half ({km.path})")
+    print("  rows    " + " ".join(f"{i}={p}" for i, p in enumerate(mx.rows)))
+    print("  columns " + " ".join(f"{i}={p}" for i, p in enumerate(mx.cols)))
+    print("  waits   " + ", ".join(f"{w} us" for w in waits))
+
+    try:
+        if args.once:
+            probes = sweep(km, replies, waits, set())
+            for p in probes:
+                print("  " + " ".join(f"{k}={v:x}" if k != "us" else f"us={v}" for k, v in p.items()))
+            print("\n".join(summary(mx, probes)))
+            return
+        print("Hold keys on this half; every change is printed (Ctrl-C ends).")
+        last, zmk_pressed = None, set()
+        while True:
+            probes = sweep(km, replies, waits, zmk_pressed)
+            state = summary(mx, probes, zmk_pressed)
+            if state != last:
+                stamp = time.strftime("%H:%M:%S")
+                print(f"{stamp}  " + f"\n{' ' * 10}".join(state))
+                last = state
+            time.sleep(0.1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        km.stop()
+
+
+if __name__ == "__main__":
+    main()

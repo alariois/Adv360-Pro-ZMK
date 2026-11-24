@@ -12,11 +12,18 @@
 #include <string.h>
 
 #include <zephyr/device.h>
+#include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/uart.h>
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/reboot.h>
+
+/* Before any ZMK header: dt-bindings/zmk/keys.h defines a macro P (the P
+ * key), which breaks nrf_gpio.h's NRF_##P##0 token pasting. */
+#if IS_ENABLED(CONFIG_SOC_SERIES_NRF52X)
+#include <hal/nrf_gpio.h>
+#endif
 
 #include <zmk/event_manager.h>
 #include <zmk/events/position_state_changed.h>
@@ -116,12 +123,146 @@ ZMK_SUBSCRIPTION(key_monitor, zmk_layer_state_changed);
 /* ---- host -> device ---------------------------------------------------- */
 
 struct command {
-    char type; /* 'K' inject, '?' hello, 'I' indicators, 'B' Bluetooth links */
+    char type; /* 'K' inject, '?' hello, 'I' indicators, 'B' Bluetooth links, 'M' matrix */
     uint8_t state;
     uint16_t position;
+    uint16_t wait_us; /* 'M': settle time before reading the rows */
 };
 
 static void send_links(void);
+
+/* ---- raw matrix probe ('M') ----------------------------------------------
+ *
+ * Scans this half's key matrix directly on the GPIO registers, bypassing
+ * ZMK's kscan driver, to tell hardware faults apart (docs/keyfix.md): for
+ * each column, drive only that column active, wait, read all rows. Also
+ * reads every column's pad back (input buffer connected for a moment), which
+ * shows a pin that can't actually reach the level it is driven to, and tries
+ * it with the high drive and as an input with a pull-up.
+ *
+ * Runs on the system work queue like ZMK's own scan (never in the middle of
+ * one) with interrupts locked per column (~50 us + the wait), and leaves the
+ * column pins exactly as it found them. A row interrupt that this raises
+ * only makes ZMK scan once more.
+ */
+#define KSCAN_NODE DT_CHOSEN(zmk_kscan)
+#define MATRIX_PROBE                                                                               \
+    (IS_ENABLED(CONFIG_SOC_SERIES_NRF52X) && DT_HAS_CHOSEN(zmk_kscan) &&                           \
+     DT_NODE_HAS_COMPAT(KSCAN_NODE, zmk_kscan_gpio_matrix))
+
+#if MATRIX_PROBE
+/* col2row: the columns are the outputs, the rows the inputs */
+BUILD_ASSERT(DT_ENUM_IDX(KSCAN_NODE, diode_direction) == 1, "matrix probe: col2row only");
+
+struct probe_pin {
+    uint32_t pin; /* nRF absolute pin number (port * 32 + pin) */
+    bool active_low;
+};
+
+#define PROBE_PIN(node, prop, idx)                                                                 \
+    {.pin = NRF_GPIO_PIN_MAP(DT_PROP(DT_GPIO_CTLR_BY_IDX(node, prop, idx), port),                  \
+                             DT_GPIO_PIN_BY_IDX(node, prop, idx)),                                  \
+     .active_low = (DT_GPIO_FLAGS_BY_IDX(node, prop, idx) & GPIO_ACTIVE_LOW) != 0},
+
+static const struct probe_pin probe_cols[] = {DT_FOREACH_PROP_ELEM(KSCAN_NODE, col_gpios, PROBE_PIN)};
+static const struct probe_pin probe_rows[] = {DT_FOREACH_PROP_ELEM(KSCAN_NODE, row_gpios, PROBE_PIN)};
+
+/* Time for the rows to fall back (pull-downs) after all columns go inactive. */
+#define PROBE_SETTLE_US 20
+
+static bool probe_level(const struct probe_pin *p) { return nrf_gpio_pin_read(p->pin) != p->active_low; }
+
+static bool probe_driven(const struct probe_pin *p) {
+    return nrf_gpio_pin_out_read(p->pin) != p->active_low;
+}
+
+static void probe_drive(const struct probe_pin *p, bool active) {
+    nrf_gpio_pin_write(p->pin, active != p->active_low);
+}
+
+static uint32_t probe_rows_now(void) {
+    uint32_t bits = 0;
+    for (size_t r = 0; r < ARRAY_SIZE(probe_rows); r++) {
+        if (probe_level(&probe_rows[r])) {
+            bits |= BIT(r);
+        }
+    }
+    return bits;
+}
+
+static void matrix_probe(uint32_t wait_us) {
+    const size_t ncols = ARRAY_SIZE(probe_cols);
+    uint32_t out = 0, idle, drv = 0, rel = 0, hd = 0, pu = 0, rows[ARRAY_SIZE(probe_cols)];
+
+    /* as found: idle ZMK drives all columns, so `idle` shows a held key's
+     * row whenever its path to the chip is intact */
+    unsigned int key = irq_lock();
+    for (size_t c = 0; c < ncols; c++) {
+        if (probe_driven(&probe_cols[c])) {
+            out |= BIT(c);
+        }
+    }
+    idle = probe_rows_now();
+    irq_unlock(key);
+
+    for (size_t c = 0; c < ncols; c++) {
+        uint32_t pin = probe_cols[c].pin;
+        NRF_GPIO_Type *port = nrf_gpio_pin_port_decode(&pin); /* pin: now within the port */
+
+        key = irq_lock();
+        uint32_t cnf = port->PIN_CNF[pin];
+        port->PIN_CNF[pin] = cnf & ~GPIO_PIN_CNF_INPUT_Msk; /* INPUT_Connect: read the pad */
+        for (size_t i = 0; i < ncols; i++) {
+            probe_drive(&probe_cols[i], false);
+        }
+        k_busy_wait(PROBE_SETTLE_US);
+        if (probe_level(&probe_cols[c])) {
+            rel |= BIT(c); /* high although driven inactive */
+        }
+        probe_drive(&probe_cols[c], true);
+        k_busy_wait(wait_us);
+        rows[c] = probe_rows_now();
+        k_busy_wait(1);
+        if (probe_level(&probe_cols[c])) {
+            drv |= BIT(c); /* reached the active level */
+        }
+        /* a pad that can't: is it held by something outside (it stays there
+         * with the high drive and with a mere pull-up) or is the pin's own
+         * output dead (a pull-up still gets it high)? */
+        port->PIN_CNF[pin] = (cnf & ~(GPIO_PIN_CNF_INPUT_Msk | GPIO_PIN_CNF_DRIVE_Msk)) |
+                             (GPIO_PIN_CNF_DRIVE_H0H1 << GPIO_PIN_CNF_DRIVE_Pos);
+        k_busy_wait(5);
+        if (probe_level(&probe_cols[c])) {
+            hd |= BIT(c);
+        }
+        port->PIN_CNF[pin] = (GPIO_PIN_CNF_DIR_Input << GPIO_PIN_CNF_DIR_Pos) |
+                             (GPIO_PIN_CNF_INPUT_Connect << GPIO_PIN_CNF_INPUT_Pos) |
+                             (GPIO_PIN_CNF_PULL_Pullup << GPIO_PIN_CNF_PULL_Pos);
+        k_busy_wait(PROBE_SETTLE_US);
+        if (nrf_gpio_pin_read(probe_cols[c].pin)) {
+            pu |= BIT(c); /* physical level */
+        }
+        for (size_t i = 0; i < ncols; i++) {
+            probe_drive(&probe_cols[i], out & BIT(i));
+        }
+        port->PIN_CNF[pin] = cnf;
+        irq_unlock(key);
+    }
+
+    static char buf[200];
+    int n = snprintf(buf, sizeof(buf), "M us=%u out=%x idle=%x", wait_us, out, idle);
+    for (size_t c = 0; c < ncols; c++) {
+        n += snprintf(buf + n, sizeof(buf) - n, " c%u=%x", (unsigned int)c, rows[c]);
+    }
+    snprintf(buf + n, sizeof(buf) - n, " drv=%x rel=%x hd=%x pu=%x\n", drv, rel, hd, pu);
+    send_line(buf);
+}
+#else
+static void matrix_probe(uint32_t wait_us) {
+    ARG_UNUSED(wait_us);
+    send_line("E no GPIO matrix to probe\n");
+}
+#endif
 
 /* split-radio counters, when that module is built in */
 __weak int split_radio_stats_text(char *buf, size_t len) {
@@ -165,6 +306,15 @@ static void handle_line(char *line) {
         }
         cmd.position = position;
         cmd.state = state;
+        break;
+    }
+    case 'M': {
+        unsigned long wait_us = strtoul(line + 1, NULL, 10);
+        if (wait_us > 1000) {
+            send_line("E bad M command\n");
+            return;
+        }
+        cmd.wait_us = wait_us;
         break;
     }
     default:
@@ -242,6 +392,8 @@ static void process_commands(struct k_work *work) {
             sys_reboot(SYS_REBOOT_COLD);
         } else if (cmd.type == 'B') {
             send_links();
+        } else if (cmd.type == 'M') {
+            matrix_probe(cmd.wait_us);
         } else if (cmd.type == 'R') {
             static char rbuf[240];
             rbuf[0] = 'R';

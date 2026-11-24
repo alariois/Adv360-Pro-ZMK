@@ -25,6 +25,18 @@ config ZMK_KEY_MONITOR
 	                                           (then reset): "S local n= mean= max= ..."
 	                    "K <position> <1|0>"   inject a press / release
 	                    "I"                    report the HID indicators (LED state)
+	                    "M [<us>]"             raw matrix probe of this half, bypassing
+	                                           ZMK (docs/keyfix.md); <us> (0-1000,
+	                                           default 0) settle time per column:
+	                    "M us=<us> out=<hex> idle=<hex> c0=<hex> ... c<n>=<hex> drv=<hex> rel=<hex> hd=<hex> pu=<hex>"
+	                      out   columns ZMK was driving active when probed
+	                      idle  rows high as found (idle ZMK drives all columns)
+	                      c<i>  rows high with only column i driven (bit = row)
+	                      drv   columns whose pad reads back active when driven
+	                      rel   columns whose pad reads back active when released
+	                      hd    the same as drv with the high drive (H0H1)
+	                      pu    columns whose pad reads high as an input with
+	                            only the pull-up (none: held low from outside)
 
 config ZMK_KEY_MONITOR_INJECT
 	bool "Accept injected key presses from the host"
