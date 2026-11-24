@@ -175,7 +175,9 @@ Costs / limits:
 
 Bluetooth to computers isn't needed (the keyboard is always plugged in), so
 the daily firmware uses the raw radio (option D) plus the 1 ms press
-debounce. Made fit for daily use:
+debounce (raised to 5 ms on 2026-11-24: 1 ms gave occasional doubled keys
+in real typing, a switch bouncing shut after a release counted as a new
+press). Made fit for daily use:
 
 * right half on its battery: crystal oscillator only while active (on for
   1 s after the last frame), polls the left half every 100 ms (LED and
