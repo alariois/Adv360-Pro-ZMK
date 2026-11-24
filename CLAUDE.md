@@ -23,6 +23,7 @@ half is on USB, the right half runs on its battery.
 | `zmk-modules/key-monitor` | **Test-only** module (snippet `key-monitor`): USB serial port that streams key positions (with device uptime)/layer changes and accepts injected presses. On both halves: on the right one it only injects/reports that half's keys, which then reach the left half over the real split link. Protocol in its `Kconfig` |
 | `tools/adv360/` | Stdlib-only Python: `keymap.py` (keymap/layout parser + key labels), `device.py` (key-monitor connection), `fmt.py` (keymap formatter) |
 | `bin/` | `build.sh` (runs in Docker), `flash.sh`, `keymap-ui`, `e2e`, `split-bench` (split latency benchmark), `split-soak` (minutes of cross-half presses, counts hangs) |
+| `docs/keyfix.md` | Open hardware repair: the original Hexpad key (position 70) died after a water spill; diagnosis so far, raw matrix test plan, wire + `col-gpios` override plan |
 | `docs/split-latency-research.md` | Measured latency of every split option (BLE tuning, short intervals, raw radio), what worked and what didn't |
 | `tests/e2e/` | End-to-end tests against the real keyboard |
 
